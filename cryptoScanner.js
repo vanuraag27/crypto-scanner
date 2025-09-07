@@ -1,11 +1,10 @@
 // cryptoScanner.js
-
 const axios = require("axios");
 const chalk = require("chalk");
 const config = require("./config");
 
 // --- State ---
-let cachedHistory = new Map(); // Store 7-day history with timestamp
+let cachedHistory = new Map();
 let predictedCoins = new Set();
 let lastPredictionTime = 0;
 
@@ -50,17 +49,14 @@ async function fetchTopCoins() {
 async function fetch7DayHistory(coinId) {
   const now = Date.now();
   const cache = cachedHistory.get(coinId);
-
-  if (cache && now - cache.timestamp < 30 * 60 * 1000) {
-    return cache.prices;
-  }
+  if (cache && now - cache.timestamp < 30 * 60 * 1000) return cache.prices;
 
   try {
     const { data } = await axios.get(
       `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart`,
       { params: { vs_currency: "usd", days: 7 } }
     );
-    await delay(1500); // Avoid rate limit
+    await delay(1500);
     const prices = data.prices.map(p => p[1]);
     cachedHistory.set(coinId, { prices, timestamp: now });
     return prices;
@@ -150,7 +146,7 @@ async function start() {
     } catch (err) {
       console.error("Scan error:", err.message);
     }
-    await delay(config.REFRESH_INTERVAL || 60000); // Default 1 min
+    await delay(config.REFRESH_INTERVAL);
   }
 }
 
