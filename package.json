@@ -1,0 +1,18 @@
+{
+  "name": "crypto-scanner",
+  "version": "1.0.0",
+  "description": "Crypto scanner with Telegram alerts",
+  "main": "cryptoScanner.js",
+  "scripts": {
+    "start": "node cryptoScanner.js"
+  },
+  "dependencies": {
+    "axios": "^1.11.0",
+    "chalk": "^4.1.2",
+    "cli-table3": "^0.6.3",
+    "node-telegram-bot-api": "^0.63.0"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
