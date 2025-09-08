@@ -1,181 +1,203 @@
-const express = require("express");
+// cryptoScanner.js
+require('dotenv').config(); // Added to load .env file
 const axios = require("axios");
-const path = require("path");
-require('dotenv').config(); // For local development
+const chalk = require("chalk");
+const express = require("express");
+const config = require("./config");
 
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-// Get configuration from environment variables (with fallbacks)
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN;
-const CHAT_ID = process.env.TELEGRAM_CHAT_ID || process.env.CHAT_ID;
-const REFRESH_INTERVAL = process.env.REFRESH_INTERVAL || 300000; // 5 minutes
+// Prioritize environment variables for security
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || config.BOT_TOKEN;
+const CHAT_ID = process.env.CHAT_ID || config.CHAT_ID;
 const CMC_API_KEY = process.env.CMC_API_KEY;
 
-let lastRun = null;
-let topCoins = [];
+// --- State ---
+let cachedHistory = new Map(); // Store 7-day history with timestamp
+let predictedCoins = new Set();
+let lastPredictionTime = 0;
+let currentTop20 = []; // Store latest data for web serving
 
-// Serve static files (for potential frontend)
-app.use(express.static(path.join(__dirname, 'public')));
+// --- Delay helper ---
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-// ✅ Send Telegram Message with improved error handling
-async function sendTelegramMessage(message) {
-  if (!BOT_TOKEN || !CHAT_ID) {
-    console.log("⚠️  Telegram not configured - skipping notification");
-    return;
-  }
-
+// --- Telegram ---
+async function sendTelegram(message) {
+  if (!config.USE_TELEGRAM || !TELEGRAM_TOKEN || !CHAT_ID) return;
   try {
-    const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
-    await axios.post(url, {
+    await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
       chat_id: CHAT_ID,
-      text: message,
-      parse_mode: "Markdown"
+      text: message
     });
-    console.log("✅ Sent message to Telegram");
   } catch (err) {
-    console.error("❌ Telegram error:", err.response?.data || err.message);
-    
-    // Provide more specific error information
-    if (err.response?.status === 404) {
-      console.error("This usually means:");
-      console.error("1. Your BOT_TOKEN is incorrect");
-      console.error("2. Your CHAT_ID is incorrect");
-      console.error("3. The bot hasn't been started with /start");
-    }
+    console.error("Telegram error:", err.response ? err.response.data : err.message);
   }
 }
 
-// ✅ Fetch from CoinMarketCap with better error handling
-async function fetchTopCoins(limit = 20) {
+// --- Fetch top 20 coins (CMC API) ---
+async function fetchTopCoins() {
   if (!CMC_API_KEY) {
-    console.error("❌ CMC_API_KEY is not configured");
+    console.error("CMC API key not set.");
     return [];
   }
-
   try {
-    const url = `https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest`;
-
-    const res = await axios.get(url, {
-      headers: { "X-CMC_PRO_API_KEY": CMC_API_KEY },
+    const { data } = await axios.get("https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest", {
       params: {
         start: 1,
-        limit: limit,
+        limit: 20,
         convert: "USD"
       },
-      timeout: 10000 // 10 second timeout
+      headers: { "X-CMC_PRO_API_KEY": CMC_API_KEY }
     });
-
-    return res.data.data;
+    return data.data.map(coin => ({
+      id: coin.slug,
+      symbol: coin.symbol,
+      name: coin.name,
+      current_price: coin.quote.USD.price,
+      price_change_percentage_24h: coin.quote.USD.percent_change_24h,
+      market_cap_rank: coin.cmc_rank
+    }));
   } catch (err) {
-    console.error("❌ Error fetching top coins:", err.message);
-    
-    if (err.response?.status === 401) {
-      console.error("CMC API key is invalid");
-    } else if (err.response?.status === 429) {
-      console.error("CMC API rate limit exceeded");
-    } else if (err.code === 'ECONNABORTED') {
-      console.error("CMC API request timed out");
-    }
-    
+    console.error("Error fetching top coins:", err.response ? err.response.data : err.message);
     return [];
   }
 }
 
-// ✅ Format price with appropriate decimal places
-function formatPrice(price) {
-  if (price >= 1000) return price.toFixed(2);
-  if (price >= 1) return price.toFixed(4);
-  return price.toFixed(8);
-}
+// --- Fetch 7-day history with caching (CMC API) ---
+async function fetch7DayHistory(symbol) {
+  const now = Date.now();
+  const cache = cachedHistory.get(symbol);
 
-// ✅ Scanner
-async function runScanner() {
-  console.log("🚀 Running Crypto Scanner (CMC)...");
-  lastRun = new Date();
-
-  const coins = await fetchTopCoins(20);
-  if (!coins || coins.length === 0) {
-    console.log("⚠️ No coins fetched. Using previous data if available.");
-    return;
+  if (cache && now - cache.timestamp < 30 * 60 * 1000) {
+    return cache.prices;
   }
 
-  // Store for API access
-  topCoins = coins;
-
-  let message = `🚀 *Crypto Scanner Dashboard*\n⏱️ Updated: ${new Date().toLocaleTimeString()}\n\n*Top 20 Coins (CMC):*\n`;
-
-  coins.forEach((coin, i) => {
-    const change = coin.quote.USD.percent_change_24h?.toFixed(2) || "0.00";
-    const price = formatPrice(coin.quote.USD.price || 0);
-    const changeIcon = change >= 0 ? '📈' : '📉';
-    message += `${i + 1}. ${coin.symbol} (${coin.name}) - ${change}% ${changeIcon} - $${price}\n`;
-  });
-
-  console.log(message);
-  await sendTelegramMessage(message);
+  try {
+    const sevenDaysAgo = Math.floor((now - 7 * 24 * 60 * 60 * 1000) / 1000);
+    const { data } = await axios.get(
+      `https://pro-api.coinmarketcap.com/v2/cryptocurrency/ohlcv/historical`,
+      {
+        params: { symbol: symbol.toUpperCase(), time_start: sevenDaysAgo, time_end: Math.floor(now / 1000), interval: "daily" },
+        headers: { "X-CMC_PRO_API_KEY": CMC_API_KEY }
+      }
+    );
+    await delay(1500); // Avoid rate limit
+    const prices = data.data.quotes.map(q => q.quote.USD.close);
+    cachedHistory.set(symbol, { prices, timestamp: now });
+    return prices;
+  } catch (err) {
+    console.error(`Error fetching 7-day history for ${symbol}:`, err.response ? err.response.data : err.message);
+    return [];
+  }
 }
 
-// ✅ Run immediately & repeat
-runScanner();
-setInterval(runScanner, REFRESH_INTERVAL);
+// --- Estimate 24h move ---
+function estimateNext24hMove(prices) {
+  if (!prices || prices.length < 2) return 0;
+  let totalChange = 0;
+  for (let i = 1; i < prices.length; i++) {
+    totalChange += Math.abs((prices[i] - prices[i - 1]) / prices[i - 1]);
+  }
+  return (totalChange / (prices.length - 1)) * 100;
+}
 
-// ✅ API endpoints
-app.get("/", (req, res) => {
-  res.send(`
-    <html>
-      <head>
-        <title>Crypto Scanner</title>
-        <meta http-equiv="refresh" content="60">
-        <style>
-          body { font-family: Arial, sans-serif; margin: 20px; }
-          .coin { padding: 10px; border-bottom: 1px solid #eee; }
-          .positive { color: green; }
-          .negative { color: red; }
-        </style>
-      </head>
-      <body>
-        <h1>🚀 Crypto Scanner Dashboard</h1>
-        <p>⏱️ Last Updated: ${lastRun ? lastRun.toLocaleTimeString() : 'Never'}</p>
-        <div id="coins">
-          ${topCoins.map((coin, i) => {
-            const change = coin.quote.USD.percent_change_24h?.toFixed(2) || "0.00";
-            const isPositive = change >= 0;
-            return `
-              <div class="coin">
-                <b>${i + 1}. ${coin.name} (${coin.symbol})</b>
-                <span class="${isPositive ? 'positive' : 'negative'}">
-                  ${change}% ${isPositive ? '📈' : '📉'} - $${formatPrice(coin.quote.USD.price || 0)}
-                </span>
-              </div>
-            `;
-          }).join('')}
-        </div>
-        <p><a href="/json">View as JSON</a> | <a href="/healthz">Health Check</a></p>
-      </body>
-    </html>
-  `);
-});
+// --- Predict top coins (every 30 minutes) ---
+async function predictTopCoins(coins) {
+  const now = Date.now();
+  if (now - lastPredictionTime < 30 * 60 * 1000) return;
 
-app.get("/json", (req, res) => {
-  res.json({
-    status: "ok",
-    lastRun: lastRun ? lastRun.toISOString() : "not yet run",
-    coins: topCoins
+  const predictions = [];
+  for (const coin of coins) {
+    const prices = await fetch7DayHistory(coin.symbol);
+    const predictedMove = estimateNext24hMove(prices);
+    predictions.push({ ...coin, predictedMove });
+  }
+
+  predictions.sort((a, b) => b.predictedMove - a.predictedMove);
+  const topPredicted = predictions.slice(0, config.PREDICTION_TOP_N);
+
+  predictedCoins.clear();
+  topPredicted.forEach(c => predictedCoins.add(c.id));
+
+  const message = topPredicted
+    .map(c => {
+      const move = c.predictedMove !== undefined ? c.predictedMove.toFixed(2) : "N/A";
+      return `${c.symbol.toUpperCase()} (${c.name}): ±${move}%`;
+    })
+    .join("\n");
+
+  await sendTelegram(`🔮 Top ${config.PREDICTION_TOP_N} Coins Likely to Move Next 24h:\n\n${message}`);
+  lastPredictionTime = now;
+}
+
+// --- Generate HTML dashboard ---
+function generateHTMLDashboard(top20) {
+  let html = `<h1>🚀 Crypto Scanner Dashboard</h1>`;
+  html += `<p>⏱️ Updated: ${new Date().toLocaleTimeString()}</p>`;
+
+  html += `<h2>Predicted Top Movers (Next 24h):</h2><ul>`;
+  top20.filter(c => predictedCoins.has(c.id)).forEach(c => {
+    const move = c.predictedMove !== undefined ? c.predictedMove.toFixed(2) : "N/A";
+    html += `<li>🔮 ${c.symbol.toUpperCase()} (${c.name}): ±${move}%</li>`;
   });
-});
+  html += `</ul>`;
 
-app.get("/healthz", (req, res) => {
-  res.json({
-    status: "ok",
-    lastRun: lastRun ? lastRun.toISOString() : "not yet run",
-    telegramConfigured: !!(BOT_TOKEN && CHAT_ID),
-    cmcConfigured: !!CMC_API_KEY
+  html += `<h2>Top 20 Coins by 24h Change:</h2><ol>`;
+  top20.forEach(coin => {
+    const change = coin.price_change_percentage_24h !== undefined ? coin.price_change_percentage_24h.toFixed(2) : "N/A";
+    const price = coin.current_price !== undefined ? coin.current_price.toFixed(4) : "N/A";
+    const direction = parseFloat(change) > 0 ? '📈' : '📉';
+    let line = `${coin.symbol.toUpperCase()} (${coin.name}) ${change}% ${direction} - $${price}`;
+    if (coin.price_change_percentage_24h >= config.ALERT_10_PERCENT_THRESHOLD) line += " 🚀";
+    if (coin.price_change_percentage_24h <= -config.ALERT_10_PERCENT_THRESHOLD) line += " 🔻";
+    html += `<li>${line}</li>`;
   });
-});
+  html += `</ol>`;
 
-app.listen(PORT, () => {
-  console.log(`🌍 Server running on port ${PORT}`);
-  console.log(`⚠️  Telegram notifications: ${BOT_TOKEN && CHAT_ID ? 'ENABLED' : 'DISABLED'}`);
-  console.log(`⚠️  CMC API: ${CMC_API_KEY ? 'CONFIGURED' : 'NOT CONFIGURED'}`);
-});
+  html += `<a href="/json">View as JSON</a> | <a href="/health">Health Check</a>`;
+  return html;
+}
+
+// --- Main scan loop ---
+async function scan() {
+  const coins = await fetchTopCoins();
+  if (!coins.length) return;
+
+  await predictTopCoins(coins);
+  currentTop20 = coins; // Update for web serving
+}
+
+// --- Start scanner and web server ---
+async function start() {
+  console.log("🚀 Running Crypto Scanner (CMC)...");
+  console.log(`⚠️ Telegram notifications: ${TELEGRAM_TOKEN && CHAT_ID ? "ENABLED" : "DISABLED"}`);
+  console.log(`⚠️ CMC API: ${CMC_API_KEY ? "CONFIGURED" : "NOT CONFIGURED"}`);
+
+  const app = express();
+  const port = process.env.PORT || 10000;
+
+  app.get("/", (req, res) => {
+    res.send(generateHTMLDashboard(currentTop20));
+  });
+
+  app.get("/json", (req, res) => {
+    res.json(currentTop20);
+  });
+
+  app.get("/health", (req, res) => {
+    res.status(200).send("OK");
+  });
+
+  app.listen(port, () => console.log(`🌍 Server running on port ${port}`));
+
+  while (true) {
+    try {
+      await scan();
+    } catch (err) {
+      console.error("Scan error:", err.message);
+    }
+    await delay(config.REFRESH_INTERVAL || 60000); // Default 1 min
+  }
+}
+
+start();
