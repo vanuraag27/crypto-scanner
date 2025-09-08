@@ -1,90 +1,85 @@
-// cryptoScanner.js
+const express = require("express");
 const axios = require("axios");
-const chalk = require("chalk");
-const config = require("./config");
+const { BOT_TOKEN, CHAT_ID, REFRESH_INTERVAL } = require("./config");
 
-// Telegram config
-const TELEGRAM_API = `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`;
+const app = express();
+const PORT = process.env.PORT || 3000; // Render requires dynamic port
 
-// Refresh interval (10 minutes = 600000 ms to avoid 429 errors)
-const REFRESH_INTERVAL = 600000;
+let lastRun = null;
 
-// Simple in-memory cache
-let lastData = null;
-let lastUpdated = null;
-
-// Fetch top coins (cached)
-async function fetchTopCoins() {
+// ✅ Helper: Send message to Telegram
+async function sendTelegramMessage(message) {
   try {
-    // If cached data is less than 10 min old, reuse it
-    if (lastData && Date.now() - lastUpdated < REFRESH_INTERVAL) {
-      return lastData;
-    }
+    const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
+    await axios.post(url, {
+      chat_id: CHAT_ID,
+      text: message,
+      parse_mode: "Markdown"
+    });
+    console.log("✅ Sent message to Telegram");
+  } catch (err) {
+    console.error("❌ Telegram error:", err.response?.data || err.message);
+  }
+}
 
-    const url =
-      "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1&sparkline=false&price_change_percentage=24h";
-    const response = await axios.get(url);
-
-    lastData = response.data;
-    lastUpdated = Date.now();
-
-    return lastData;
-  } catch (error) {
-    console.error(
-      chalk.red("Error fetching top coins:"),
-      error.response?.data || error.message
-    );
+// ✅ Helper: Fetch coins from CoinGecko
+async function fetchTopCoins(limit = 20) {
+  try {
+    const url = `https://api.coingecko.com/api/v3/coins/markets`;
+    const res = await axios.get(url, {
+      params: {
+        vs_currency: "usd",
+        order: "market_cap_desc",
+        per_page: limit,
+        page: 1,
+        sparkline: false
+      }
+    });
+    return res.data;
+  } catch (err) {
+    console.error("❌ Error fetching top coins:", err.response?.data || err.message);
     return [];
   }
 }
 
-// Send message to Telegram
-async function sendToTelegram(message) {
-  try {
-    await axios.post(TELEGRAM_API, {
-      chat_id: config.telegramChatId,
-      text: message,
-      parse_mode: "Markdown",
-    });
-  } catch (err) {
-    console.error("Telegram error:", err.response?.data || err.message);
-  }
-}
-
-// Main scanner
+// ✅ Scanner function
 async function runScanner() {
-  console.clear();
-  console.log(chalk.cyan("🚀 Crypto Scanner Dashboard"));
+  console.log("🚀 Running Crypto Scanner...");
+  lastRun = new Date();
 
-  const coins = await fetchTopCoins();
+  const coins = await fetchTopCoins(20);
   if (!coins || coins.length === 0) {
-    console.log(chalk.red("No coins data available."));
+    console.log("⚠️ No coins fetched.");
     return;
   }
 
-  console.log(chalk.yellow(`⏱️ Updated: ${new Date().toLocaleTimeString()}\n`));
+  let message = `🚀 Crypto Scanner Dashboard\n⏱️ Updated: ${new Date().toLocaleTimeString()}\n\n*Top 20 Coins:*\n`;
 
-  console.log(chalk.green("Top 20 by Market Cap (Cached if API limited):"));
-  coins.forEach((coin, idx) => {
-    console.log(
-      `${idx + 1}. ${chalk.bold(coin.symbol.toUpperCase())} (${coin.name}) - ${chalk.cyan(
-        (coin.price_change_percentage_24h || 0).toFixed(2) + "%"
-      )} - $${coin.current_price.toFixed(4)}`
-    );
+  coins.forEach((coin, i) => {
+    const change = coin.price_change_percentage_24h?.toFixed(2) || "0.00";
+    message += `${i + 1}. ${coin.symbol.toUpperCase()} (${coin.name}) - ${change}% - $${coin.current_price}\n`;
   });
 
-  // Telegram alert
-  let message = "📊 *Top 20 Coins (Market Cap)*\n\n";
-  coins.forEach((coin, idx) => {
-    message += `${idx + 1}. ${coin.symbol.toUpperCase()} - ${coin.price_change_percentage_24h?.toFixed(
-      2
-    )}% - $${coin.current_price.toFixed(4)}\n`;
-  });
-  message += `\n⏱️ Updated: ${new Date().toLocaleTimeString()}`;
-
-  await sendToTelegram(message);
+  console.log(message);
+  await sendTelegramMessage(message);
 }
 
-// Run on interval
+// ✅ Run scanner immediately and repeat
 runScanner();
-setInterval(runScanner, REFRESH_INTERVAL);
+setInterval(runScanner, REFRESH_INTERVAL || 5 * 60 * 1000);
+
+// ✅ Express server (for Render + health checks)
+app.get("/", (req, res) => {
+  res.send("✅ Crypto Scanner is running!");
+});
+
+app.get("/healthz", (req, res) => {
+  res.json({
+    status: "ok",
+    lastRun: lastRun ? lastRun.toISOString() : "not yet run"
+  });
+});
+
+app.listen(PORT, () => {
+  console.log(`🌍 Server running on port ${PORT}`);
+});
