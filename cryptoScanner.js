@@ -1,13 +1,13 @@
 const express = require("express");
 const axios = require("axios");
-const { BOT_TOKEN, CHAT_ID, REFRESH_INTERVAL } = require("./config");
+const { BOT_TOKEN, CHAT_ID, REFRESH_INTERVAL, CMC_API_KEY } = require("./config");
 
 const app = express();
-const PORT = process.env.PORT || 3000; // Render requires dynamic port
+const PORT = process.env.PORT || 3000;
 
 let lastRun = null;
 
-// ✅ Helper: Send message to Telegram
+// ✅ Send Telegram Message
 async function sendTelegramMessage(message) {
   try {
     const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
@@ -22,29 +22,30 @@ async function sendTelegramMessage(message) {
   }
 }
 
-// ✅ Helper: Fetch coins from CoinGecko
+// ✅ Fetch from CoinMarketCap
 async function fetchTopCoins(limit = 20) {
   try {
-    const url = `https://api.coingecko.com/api/v3/coins/markets`;
+    const url = `https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest`;
+
     const res = await axios.get(url, {
+      headers: { "X-CMC_PRO_API_KEY": CMC_API_KEY },
       params: {
-        vs_currency: "usd",
-        order: "market_cap_desc",
-        per_page: limit,
-        page: 1,
-        sparkline: false
+        start: 1,
+        limit: limit,
+        convert: "USD"
       }
     });
-    return res.data;
+
+    return res.data.data;
   } catch (err) {
     console.error("❌ Error fetching top coins:", err.response?.data || err.message);
     return [];
   }
 }
 
-// ✅ Scanner function
+// ✅ Scanner
 async function runScanner() {
-  console.log("🚀 Running Crypto Scanner...");
+  console.log("🚀 Running Crypto Scanner (CMC)...");
   lastRun = new Date();
 
   const coins = await fetchTopCoins(20);
@@ -53,24 +54,25 @@ async function runScanner() {
     return;
   }
 
-  let message = `🚀 Crypto Scanner Dashboard\n⏱️ Updated: ${new Date().toLocaleTimeString()}\n\n*Top 20 Coins:*\n`;
+  let message = `🚀 *Crypto Scanner Dashboard*\n⏱️ Updated: ${new Date().toLocaleTimeString()}\n\n*Top 20 Coins (CMC):*\n`;
 
   coins.forEach((coin, i) => {
-    const change = coin.price_change_percentage_24h?.toFixed(2) || "0.00";
-    message += `${i + 1}. ${coin.symbol.toUpperCase()} (${coin.name}) - ${change}% - $${coin.current_price}\n`;
+    const change = coin.quote.USD.percent_change_24h?.toFixed(2) || "0.00";
+    const price = coin.quote.USD.price?.toFixed(4) || "0.00";
+    message += `${i + 1}. ${coin.symbol} (${coin.name}) - ${change}% - $${price}\n`;
   });
 
   console.log(message);
   await sendTelegramMessage(message);
 }
 
-// ✅ Run scanner immediately and repeat
+// ✅ Run immediately & repeat
 runScanner();
-setInterval(runScanner, REFRESH_INTERVAL || 5 * 60 * 1000);
+setInterval(runScanner, REFRESH_INTERVAL);
 
-// ✅ Express server (for Render + health checks)
+// ✅ Health check
 app.get("/", (req, res) => {
-  res.send("✅ Crypto Scanner is running!");
+  res.send("✅ Crypto Scanner (CMC) is running!");
 });
 
 app.get("/healthz", (req, res) => {
