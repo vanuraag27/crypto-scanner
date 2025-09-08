@@ -1,9 +1,13 @@
-require("dotenv").config();
-
 module.exports = {
-  REFRESH_INTERVAL: process.env.REFRESH_INTERVAL || 300000, // 5 minutes
-  USE_TELEGRAM: process.env.USE_TELEGRAM !== "false", // default true
-  BOT_TOKEN: process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN,
-  CHAT_ID: process.env.CHAT_ID || process.env.TELEGRAM_CHAT_ID,
-  CMC_API_KEY: process.env.CMC_API_KEY
+  REFRESH_INTERVAL: 30 * 1000,
+  ALERT_UP_THRESHOLD: 10,
+  ALERT_DOWN_THRESHOLD: -10,
+  USE_TELEGRAM: true,
+  BOT_TOKEN: process.env.TELEGRAM_TOKEN || '',
+  CHAT_ID: process.env.CHAT_ID || '',
+  MIN_VOLUME: 500000,
+  FAST_DELTA_THRESHOLD: 0.5,
+  ALERT_10_PERCENT_THRESHOLD: 10,
+  ALERT_20_PERCENT_THRESHOLD: 20,
+  PREDICTION_TOP_N: 20
 };
