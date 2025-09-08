@@ -1,5 +1,5 @@
 // cryptoScanner.js
-require('dotenv').config(); // Added to load .env file
+require('dotenv').config();
 const axios = require("axios");
 const chalk = require("chalk");
 const express = require("express");
