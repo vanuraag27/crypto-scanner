@@ -1,4 +1,3 @@
-```javascript
 require('dotenv').config();
 const axios = require("axios");
 const chalk = require("chalk");
@@ -50,7 +49,7 @@ async function getUserGeolocation(req) {
     return { country: data.country || "Unknown", currency: mapCountryToCurrency(data.countryCode) };
   } catch (err) {
     console.error("Geolocation error:", err.message);
-    return { country: "Unknown", currency: "USD" };
+    return { country: "India", currency: "INR" }; // Default to India/INR
   }
 }
 
@@ -68,7 +67,7 @@ function mapCountryToCurrency(countryCode) {
     "TR": "TRY",
     "PE": "PEN"
   };
-  return currencyMap[countryCode] || "USD";
+  return currencyMap[countryCode] || "INR"; // Default to INR
 }
 
 // --- Fetch top 20 coins (CMC API) ---
@@ -223,7 +222,9 @@ async function predictTopCoins(coins, localCurrency) {
 
   console.log("Predicting top coins...");
   const predictions = [];
-  for (const coin of coins) {
+  // Process only top PREDICTION_TOP_N coins to reduce API calls
+  const topCoins = coins.slice(0, config.PREDICTION_TOP_N);
+  for (const coin of topCoins) {
     const prices = await fetch7DayHistory(coin.symbol);
     const predictedMove = estimateNext24hMove(prices);
     const localPrice = await fetchLocalPrice(coin.symbol, localCurrency);
@@ -334,10 +335,10 @@ async function start() {
 
   app.listen(port, () => console.log(`🌍 Server running on port ${port}`));
 
-  // Run scan in the background with default USD
+  // Run scan in the background with INR for Telegram (user in India)
   setInterval(async () => {
     try {
-      await scan("USD");
+      await scan("INR");
     } catch (err) {
       console.error("Scan error:", err.message);
     }
