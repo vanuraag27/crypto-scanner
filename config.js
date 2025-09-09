@@ -1,4 +1,3 @@
-// config.js
 module.exports = {
   REFRESH_INTERVAL: 30 * 1000, // 30 seconds
   ALERT_UP_THRESHOLD: 10,        // % gain to alert
