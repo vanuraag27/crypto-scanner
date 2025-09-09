@@ -1,4 +1,3 @@
-// cryptoScanner.js
 require('dotenv').config();
 const axios = require("axios");
 const chalk = require("chalk");
@@ -15,6 +14,8 @@ let cachedHistory = new Map(); // Store 7-day history with timestamp
 let predictedCoins = new Set();
 let lastPredictionTime = 0;
 let currentTop20 = []; // Store latest data for web serving
+let userCurrency = "USD"; // Default currency
+let userCountry = "Unknown"; // Default country
 
 // --- Delay helper ---
 function delay(ms) {
@@ -38,6 +39,35 @@ async function sendTelegram(message) {
   }
 }
 
+// --- Get user geolocation ---
+async function getUserGeolocation(req) {
+  try {
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const { data } = await axios.get(`http://ip-api.com/json/${ip}`, { timeout: 5000 });
+    return { country: data.country || "Unknown", currency: mapCountryToCurrency(data.countryCode) };
+  } catch (err) {
+    console.error("Geolocation error:", err.message);
+    return { country: "Unknown", currency: "USD" };
+  }
+}
+
+// --- Map country to currency ---
+function mapCountryToCurrency(countryCode) {
+  const currencyMap = {
+    "IN": "INR",
+    "US": "USD",
+    "GB": "GBP",
+    "EU": "EUR",
+    "JP": "JPY",
+    "NG": "NGN",
+    "VN": "VND",
+    "PH": "PHP",
+    "TR": "TRY",
+    "PE": "PEN"
+  };
+  return currencyMap[countryCode] || "USD";
+}
+
 // --- Fetch top 20 coins (CMC API) ---
 async function fetchTopCoins() {
   if (!CMC_API_KEY) {
@@ -57,10 +87,10 @@ async function fetchTopCoins() {
     });
     console.log("Fetched top 20 coins successfully");
     return data.data.map(coin => ({
-      id: coin.slug, // Use slug for CoinGecko compatibility
+      id: coin.slug,
       symbol: coin.symbol,
       name: coin.name,
-      current_price: coin.quote.USD.price,
+      current_price_usd: coin.quote.USD.price,
       price_change_percentage_24h: coin.quote.USD.percent_change_24h,
       market_cap_rank: coin.cmc_rank
     }));
@@ -75,7 +105,7 @@ const symbolToCoinGeckoId = {
   "USDT": "tether",
   "USDC": "usd-coin",
   "HYPE": "hyperliquid",
-  "USDE": "usd-coin", // Adjust if needed
+  "USDE": "usd-coin",
   "BTC": "bitcoin",
   "ETH": "ethereum",
   "XRP": "ripple",
@@ -93,6 +123,25 @@ const symbolToCoinGeckoId = {
   "LEO": "leo-token",
   "LTC": "litecoin"
 };
+
+// --- Fetch local currency price (CoinGecko) ---
+async function fetchLocalPrice(symbol, currency) {
+  try {
+    const coinId = symbolToCoinGeckoId[symbol.toUpperCase()] || symbol.toLowerCase();
+    const { data } = await axios.get("https://api.coingecko.com/api/v3/simple/price", {
+      params: {
+        ids: coinId,
+        vs_currencies: currency.toLowerCase()
+      },
+      timeout: 5000
+    });
+    await delay(15000); // 15s to avoid rate limit
+    return data[coinId][currency.toLowerCase()];
+  } catch (err) {
+    console.error(`Error fetching local price for ${symbol} in ${currency}:`, err.response ? err.response.data : err.message);
+    return null;
+  }
+}
 
 // --- Fetch 7-day history with caching (CoinGecko API) ---
 async function fetch7DayHistory(symbol) {
@@ -114,7 +163,7 @@ async function fetch7DayHistory(symbol) {
         timeout: 10000
       }
     );
-    await delay(6000); // Increased to 6s to avoid rate limit (10 calls/min)
+    await delay(15000); // 15s delay to avoid rate limit (4 calls/min)
     const prices = data.prices.map(p => p[1]);
     cachedHistory.set(symbol, { prices, timestamp: now });
     console.log(`Fetched 7-day history for ${symbol} successfully`);
@@ -139,7 +188,7 @@ function estimateNext24hMove(prices) {
 }
 
 // --- Predict top coins (every 30 minutes) ---
-async function predictTopCoins(coins) {
+async function predictTopCoins(coins, localCurrency) {
   const now = Date.now();
   if (now - lastPredictionTime < 30 * 60 * 1000) {
     console.log("Skipping prediction: too soon");
@@ -151,7 +200,8 @@ async function predictTopCoins(coins) {
   for (const coin of coins) {
     const prices = await fetch7DayHistory(coin.symbol);
     const predictedMove = estimateNext24hMove(prices);
-    predictions.push({ ...coin, predictedMove });
+    const localPrice = await fetchLocalPrice(coin.symbol, localCurrency);
+    predictions.push({ ...coin, predictedMove, localPrice });
   }
 
   predictions.sort((a, b) => b.predictedMove - a.predictedMove);
@@ -163,7 +213,9 @@ async function predictTopCoins(coins) {
   const message = topPredicted
     .map(c => {
       const move = c.predictedMove !== undefined ? c.predictedMove.toFixed(2) : "N/A";
-      return `${c.symbol.toUpperCase()} (${c.name}): ±${move}%`;
+      const usdPrice = c.current_price_usd !== undefined ? c.current_price_usd.toFixed(2) : "N/A";
+      const localPrice = c.localPrice !== null ? c.localPrice.toFixed(2) : "N/A";
+      return `${c.symbol.toUpperCase()} (${c.name}): ±${move}% ($${usdPrice}, ${localCurrency} ${localPrice})`;
     })
     .join("\n");
 
@@ -172,14 +224,14 @@ async function predictTopCoins(coins) {
     return;
   }
 
-  await sendTelegram(`🔮 Top ${config.PREDICTION_TOP_N} Coins Likely to Move Next 24h:\n\n${message}`);
+  await sendTelegram(`🔮 Top ${config.PREDICTION_TOP_N} Coins Likely to Move Next 24h (${userCountry}):\n\n${message}`);
   lastPredictionTime = now;
   console.log("Prediction completed");
 }
 
 // --- Generate HTML dashboard ---
-function generateHTMLDashboard(top20) {
-  let html = `<h1>🚀 Crypto Scanner Dashboard</h1>`;
+function generateHTMLDashboard(top20, localCurrency) {
+  let html = `<h1>🚀 Crypto Scanner Dashboard (${userCountry})</h1>`;
   html += `<p>⏱️ Updated: ${new Date().toLocaleTimeString()}</p>`;
 
   html += `<h2>Predicted Top Movers (Next 24h):</h2><ul>`;
@@ -188,7 +240,9 @@ function generateHTMLDashboard(top20) {
   } else {
     top20.filter(c => predictedCoins.has(c.id)).forEach(c => {
       const move = c.predictedMove !== undefined ? c.predictedMove.toFixed(2) : "N/A";
-      html += `<li>🔮 ${c.symbol.toUpperCase()} (${c.name}): ±${move}%</li>`;
+      const usdPrice = c.current_price_usd !== undefined ? c.current_price_usd.toFixed(2) : "N/A";
+      const localPrice = c.localPrice !== null ? c.localPrice.toFixed(2) : "N/A";
+      html += `<li>🔮 ${c.symbol.toUpperCase()} (${c.name}): ±${move}% ($${usdPrice}, ${localCurrency} ${localPrice})</li>`;
     });
   }
   html += `</ul>`;
@@ -196,9 +250,9 @@ function generateHTMLDashboard(top20) {
   html += `<h2>Top 20 Coins by 24h Change:</h2><ol>`;
   top20.forEach(coin => {
     const change = coin.price_change_percentage_24h !== undefined ? coin.price_change_percentage_24h.toFixed(2) : "N/A";
-    const price = coin.current_price !== undefined ? coin.current_price.toFixed(4) : "N/A";
+    const usdPrice = coin.current_price_usd !== undefined ? coin.current_price_usd.toFixed(2) : "N/A";
     const direction = parseFloat(change) > 0 ? '📈' : '📉';
-    let line = `${coin.symbol.toUpperCase()} (${coin.name}) ${change}% ${direction} - $${price}`;
+    let line = `${coin.symbol.toUpperCase()} (${coin.name}) ${change}% ${direction} - $${usdPrice}`;
     if (coin.price_change_percentage_24h >= config.ALERT_10_PERCENT_THRESHOLD) line += " 🚀";
     if (coin.price_change_percentage_24h <= -config.ALERT_10_PERCENT_THRESHOLD) line += " 🔻";
     html += `<li>${line}</li>`;
@@ -210,7 +264,7 @@ function generateHTMLDashboard(top20) {
 }
 
 // --- Main scan loop ---
-async function scan() {
+async function scan(localCurrency) {
   console.log("Starting scan...");
   const coins = await fetchTopCoins();
   if (!coins.length) {
@@ -218,7 +272,7 @@ async function scan() {
     return;
   }
 
-  await predictTopCoins(coins);
+  await predictTopCoins(coins, localCurrency);
   currentTop20 = coins; // Update for web serving
   console.log("Scan completed");
 }
@@ -232,11 +286,19 @@ async function start() {
   const app = express();
   const port = process.env.PORT || 10000;
 
-  app.get("/", (req, res) => {
-    res.send(generateHTMLDashboard(currentTop20));
+  app.get("/", async (req, res) => {
+    const geo = await getUserGeolocation(req);
+    userCountry = geo.country;
+    userCurrency = geo.currency;
+    await scan(userCurrency);
+    res.send(generateHTMLDashboard(currentTop20, userCurrency));
   });
 
-  app.get("/json", (req, res) => {
+  app.get("/json", async (req, res) => {
+    const geo = await getUserGeolocation(req);
+    userCountry = geo.country;
+    userCurrency = geo.currency;
+    await scan(userCurrency);
     res.json(currentTop20);
   });
 
@@ -246,10 +308,10 @@ async function start() {
 
   app.listen(port, () => console.log(`🌍 Server running on port ${port}`));
 
-  // Run scan in the background
+  // Run scan in the background with default USD
   setInterval(async () => {
     try {
-      await scan();
+      await scan("USD");
     } catch (err) {
       console.error("Scan error:", err.message);
     }
