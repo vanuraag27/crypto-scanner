@@ -4,7 +4,8 @@
   "description": "Crypto scanner with Telegram alerts",
   "main": "cryptoScanner.js",
   "scripts": {
-    "start": "node cryptoScanner.js"
+    "start": "node cryptoScanner.js",
+    "test-telegram": "INVEST_AMOUNT=10000 node testTelegram.js"
   },
   "dependencies": {
     "axios": "^1.7.7",
