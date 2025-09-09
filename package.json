@@ -1,5 +1,4 @@
-```json
-{
+ {
   "name": "crypto-scanner",
   "version": "1.0.0",
   "description": "Crypto price scanner using CMC and CoinGecko APIs",
@@ -20,3 +19,4 @@
   "author": "",
   "license": "ISC"
 }
+```
