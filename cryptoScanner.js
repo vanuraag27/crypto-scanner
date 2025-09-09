@@ -23,12 +23,16 @@ function delay(ms) {
 
 // --- Telegram ---
 async function sendTelegram(message) {
-  if (!config.USE_TELEGRAM || !TELEGRAM_TOKEN || !CHAT_ID) return;
+  if (!config.USE_TELEGRAM || !TELEGRAM_TOKEN || !CHAT_ID) {
+    console.log("Skipping Telegram notification: not configured");
+    return;
+  }
   try {
     await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
       chat_id: CHAT_ID,
       text: message
     });
+    console.log("Telegram message sent successfully");
   } catch (err) {
     console.error("Telegram error:", err.response ? err.response.data : err.message);
   }
@@ -41,16 +45,19 @@ async function fetchTopCoins() {
     return [];
   }
   try {
+    console.log("Fetching top 20 coins from CMC...");
     const { data } = await axios.get("https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest", {
       params: {
         start: 1,
         limit: 20,
         convert: "USD"
       },
-      headers: { "X-CMC_PRO_API_KEY": CMC_API_KEY }
+      headers: { "X-CMC_PRO_API_KEY": CMC_API_KEY },
+      timeout: 10000
     });
+    console.log("Fetched top 20 coins successfully");
     return data.data.map(coin => ({
-      id: coin.slug,
+      id: coin.slug, // Use slug for CoinGecko compatibility
       symbol: coin.symbol,
       name: coin.name,
       current_price: coin.quote.USD.price,
@@ -63,27 +70,31 @@ async function fetchTopCoins() {
   }
 }
 
-// --- Fetch 7-day history with caching (CMC API) ---
+// --- Fetch 7-day history with caching (CoinGecko API) ---
 async function fetch7DayHistory(symbol) {
   const now = Date.now();
   const cache = cachedHistory.get(symbol);
 
   if (cache && now - cache.timestamp < 30 * 60 * 1000) {
+    console.log(`Using cached history for ${symbol}`);
     return cache.prices;
   }
 
   try {
-    const sevenDaysAgo = Math.floor((now - 7 * 24 * 60 * 60 * 1000) / 1000);
+    console.log(`Fetching 7-day history for ${symbol} from CoinGecko...`);
+    // Map CMC symbol to CoinGecko ID (simplified; may need mapping for some coins)
+    const coinId = symbol.toLowerCase(); // Note: May need a mapping (e.g., USDT -> tether)
     const { data } = await axios.get(
-      `https://pro-api.coinmarketcap.com/v2/cryptocurrency/ohlcv/historical`,
+      `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart`,
       {
-        params: { symbol: symbol.toUpperCase(), time_start: sevenDaysAgo, time_end: Math.floor(now / 1000), interval: "daily" },
-        headers: { "X-CMC_PRO_API_KEY": CMC_API_KEY }
+        params: { vs_currency: "usd", days: 7, interval: "daily" },
+        timeout: 10000
       }
     );
-    await delay(1500); // Avoid rate limit
-    const prices = data.data.quotes.map(q => q.quote.USD.close);
+    await delay(1500); // Avoid CoinGecko rate limit (10-50 calls/min)
+    const prices = data.prices.map(p => p[1]);
     cachedHistory.set(symbol, { prices, timestamp: now });
+    console.log(`Fetched 7-day history for ${symbol} successfully`);
     return prices;
   } catch (err) {
     console.error(`Error fetching 7-day history for ${symbol}:`, err.response ? err.response.data : err.message);
@@ -104,8 +115,12 @@ function estimateNext24hMove(prices) {
 // --- Predict top coins (every 30 minutes) ---
 async function predictTopCoins(coins) {
   const now = Date.now();
-  if (now - lastPredictionTime < 30 * 60 * 1000) return;
+  if (now - lastPredictionTime < 30 * 60 * 1000) {
+    console.log("Skipping prediction: too soon");
+    return;
+  }
 
+  console.log("Predicting top coins...");
   const predictions = [];
   for (const coin of coins) {
     const prices = await fetch7DayHistory(coin.symbol);
@@ -128,6 +143,7 @@ async function predictTopCoins(coins) {
 
   await sendTelegram(`🔮 Top ${config.PREDICTION_TOP_N} Coins Likely to Move Next 24h:\n\n${message}`);
   lastPredictionTime = now;
+  console.log("Prediction completed");
 }
 
 // --- Generate HTML dashboard ---
@@ -147,7 +163,7 @@ function generateHTMLDashboard(top20) {
     const change = coin.price_change_percentage_24h !== undefined ? coin.price_change_percentage_24h.toFixed(2) : "N/A";
     const price = coin.current_price !== undefined ? coin.current_price.toFixed(4) : "N/A";
     const direction = parseFloat(change) > 0 ? '📈' : '📉';
-    let line = `${coin.symbol.toUpperCase()} (${coin.name}) ${change}% ${direction} - $${price}`;
+    let line = `${coin.symbol.toUpperCase()} (${c.name}) ${change}% ${direction} - $${price}`;
     if (coin.price_change_percentage_24h >= config.ALERT_10_PERCENT_THRESHOLD) line += " 🚀";
     if (coin.price_change_percentage_24h <= -config.ALERT_10_PERCENT_THRESHOLD) line += " 🔻";
     html += `<li>${line}</li>`;
@@ -160,11 +176,16 @@ function generateHTMLDashboard(top20) {
 
 // --- Main scan loop ---
 async function scan() {
+  console.log("Starting scan...");
   const coins = await fetchTopCoins();
-  if (!coins.length) return;
+  if (!coins.length) {
+    console.log("No coins fetched, skipping scan");
+    return;
+  }
 
   await predictTopCoins(coins);
   currentTop20 = coins; // Update for web serving
+  console.log("Scan completed");
 }
 
 // --- Start scanner and web server ---
@@ -190,14 +211,14 @@ async function start() {
 
   app.listen(port, () => console.log(`🌍 Server running on port ${port}`));
 
-  while (true) {
+  // Run scan in the background
+  setInterval(async () => {
     try {
       await scan();
     } catch (err) {
       console.error("Scan error:", err.message);
     }
-    await delay(config.REFRESH_INTERVAL || 60000); // Default 1 min
-  }
+  }, config.REFRESH_INTERVAL || 60000);
 }
 
 start();
