@@ -70,6 +70,30 @@ async function fetchTopCoins() {
   }
 }
 
+// --- CoinGecko symbol to ID mapping ---
+const symbolToCoinGeckoId = {
+  "USDT": "tether",
+  "USDC": "usd-coin",
+  "HYPE": "hyperliquid",
+  "USDE": "usd-coin", // Adjust if needed
+  "BTC": "bitcoin",
+  "ETH": "ethereum",
+  "XRP": "ripple",
+  "BNB": "binancecoin",
+  "SOL": "solana",
+  "DOGE": "dogecoin",
+  "TRX": "tron",
+  "ADA": "cardano",
+  "LINK": "chainlink",
+  "SUI": "sui",
+  "XLM": "stellar",
+  "BCH": "bitcoin-cash",
+  "AVAX": "avalanche-2",
+  "HBAR": "hedera",
+  "LEO": "leo-token",
+  "LTC": "litecoin"
+};
+
 // --- Fetch 7-day history with caching (CoinGecko API) ---
 async function fetch7DayHistory(symbol) {
   const now = Date.now();
@@ -82,8 +106,7 @@ async function fetch7DayHistory(symbol) {
 
   try {
     console.log(`Fetching 7-day history for ${symbol} from CoinGecko...`);
-    // Map CMC symbol to CoinGecko ID (simplified; may need mapping for some coins)
-    const coinId = symbol.toLowerCase(); // Note: May need a mapping (e.g., USDT -> tether)
+    const coinId = symbolToCoinGeckoId[symbol.toUpperCase()] || symbol.toLowerCase();
     const { data } = await axios.get(
       `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart`,
       {
@@ -91,13 +114,16 @@ async function fetch7DayHistory(symbol) {
         timeout: 10000
       }
     );
-    await delay(1500); // Avoid CoinGecko rate limit (10-50 calls/min)
+    await delay(6000); // Increased to 6s to avoid rate limit (10 calls/min)
     const prices = data.prices.map(p => p[1]);
     cachedHistory.set(symbol, { prices, timestamp: now });
     console.log(`Fetched 7-day history for ${symbol} successfully`);
     return prices;
   } catch (err) {
     console.error(`Error fetching 7-day history for ${symbol}:`, err.response ? err.response.data : err.message);
+    if (err.response && err.response.status === 429) {
+      console.log(`Rate limit hit for ${symbol}, returning empty prices`);
+    }
     return [];
   }
 }
@@ -141,6 +167,11 @@ async function predictTopCoins(coins) {
     })
     .join("\n");
 
+  if (topPredicted.every(c => c.predictedMove === 0)) {
+    console.log("No valid predictions due to API errors, skipping Telegram notification");
+    return;
+  }
+
   await sendTelegram(`🔮 Top ${config.PREDICTION_TOP_N} Coins Likely to Move Next 24h:\n\n${message}`);
   lastPredictionTime = now;
   console.log("Prediction completed");
@@ -152,10 +183,14 @@ function generateHTMLDashboard(top20) {
   html += `<p>⏱️ Updated: ${new Date().toLocaleTimeString()}</p>`;
 
   html += `<h2>Predicted Top Movers (Next 24h):</h2><ul>`;
-  top20.filter(c => predictedCoins.has(c.id)).forEach(c => {
-    const move = c.predictedMove !== undefined ? c.predictedMove.toFixed(2) : "N/A";
-    html += `<li>🔮 ${c.symbol.toUpperCase()} (${c.name}): ±${move}%</li>`;
-  });
+  if (predictedCoins.size === 0) {
+    html += `<li>No predictions available due to API limitations</li>`;
+  } else {
+    top20.filter(c => predictedCoins.has(c.id)).forEach(c => {
+      const move = c.predictedMove !== undefined ? c.predictedMove.toFixed(2) : "N/A";
+      html += `<li>🔮 ${c.symbol.toUpperCase()} (${c.name}): ±${move}%</li>`;
+    });
+  }
   html += `</ul>`;
 
   html += `<h2>Top 20 Coins by 24h Change:</h2><ol>`;
@@ -163,7 +198,7 @@ function generateHTMLDashboard(top20) {
     const change = coin.price_change_percentage_24h !== undefined ? coin.price_change_percentage_24h.toFixed(2) : "N/A";
     const price = coin.current_price !== undefined ? coin.current_price.toFixed(4) : "N/A";
     const direction = parseFloat(change) > 0 ? '📈' : '📉';
-    let line = `${coin.symbol.toUpperCase()} (${c.name}) ${change}% ${direction} - $${price}`;
+    let line = `${coin.symbol.toUpperCase()} (${coin.name}) ${change}% ${direction} - $${price}`;
     if (coin.price_change_percentage_24h >= config.ALERT_10_PERCENT_THRESHOLD) line += " 🚀";
     if (coin.price_change_percentage_24h <= -config.ALERT_10_PERCENT_THRESHOLD) line += " 🔻";
     html += `<li>${line}</li>`;
