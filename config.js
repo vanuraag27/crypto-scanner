@@ -1,13 +1,18 @@
+require("dotenv").config();
+
 module.exports = {
-  REFRESH_INTERVAL: 60 * 60 * 1000, // 1 hour
-  ALERT_UP_THRESHOLD: 10,        // % gain to alert
-  ALERT_DOWN_THRESHOLD: -10,     // % drop to alert
-  USE_TELEGRAM: true,            // enable Telegram alerts
-  BOT_TOKEN: process.env.TELEGRAM_TOKEN || '', // Use env var
-  CHAT_ID: process.env.CHAT_ID || '',         // Use env var
-  MIN_VOLUME: 500000, // Only scan coins with volume > $500k
-  FAST_DELTA_THRESHOLD: 0.5, // Only alert if coin moves more than $0.5 since last scan
-  ALERT_10_PERCENT_THRESHOLD: 10, // Only alert if 24h change ≥ 10%
-  ALERT_20_PERCENT_THRESHOLD: 20,  // Only alert if 24h change ≥ 20%
-  PREDICTION_TOP_N: 5 // Reduced to avoid CoinGecko rate limits
+  // 🔑 API Keys
+  CMC_API_KEY: process.env.CMC_API_KEY || "your_cmc_api_key_here",
+  BOT_TOKEN: process.env.TELEGRAM_TOKEN || "your_telegram_token_here",
+
+  // 📩 Telegram
+  CHAT_ID: process.env.CHAT_ID || "",
+  USE_TELEGRAM: process.env.USE_TELEGRAM === "true",
+
+  // 💰 Investment settings
+  INVEST_AMOUNT: parseInt(process.env.INVEST_AMOUNT) || 10000, // Default ₹10,000
+
+  // ⚙️ Scanner settings
+  REFRESH_INTERVAL: parseInt(process.env.REFRESH_INTERVAL) || 10 * 60 * 1000, // 10 minutes
+  PORT: process.env.PORT || 10000
 };
