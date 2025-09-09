@@ -1,4 +1,3 @@
-```javascript
 module.exports = {
   BOT_TOKEN: process.env.TELEGRAM_TOKEN || '',
   CHAT_ID: process.env.CHAT_ID || '',
@@ -7,4 +6,3 @@ module.exports = {
   ALERT_10_PERCENT_THRESHOLD: parseInt(process.env.ALERT_10_PERCENT_THRESHOLD, 10) || 10,
   REFRESH_INTERVAL: parseInt(process.env.REFRESH_INTERVAL, 10) || 120000 // 2 minutes
 };
-```
