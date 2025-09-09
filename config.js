@@ -10,5 +10,5 @@ module.exports = {
   FAST_DELTA_THRESHOLD: 0.5, // Only alert if coin moves more than $0.5 since last scan
   ALERT_10_PERCENT_THRESHOLD: 10, // Only alert if 24h change ≥ 10%
   ALERT_20_PERCENT_THRESHOLD: 20,  // Only alert if 24h change ≥ 20%
-  PREDICTION_TOP_N: 20 // Number of coins to show predicted gain/loss
+  PREDICTION_TOP_N: 5 // Reduced to avoid CoinGecko rate limits
 };
