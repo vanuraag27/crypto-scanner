@@ -45,7 +45,7 @@ async function getUserGeolocation(req) {
   try {
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     const { data } = await axios.get(`http://ip-api.com/json/${ip}`, { timeout: 5000 });
-    return { country: data.country || "Unknown", currency: mapCountryToCurrency(data.countryCode) };
+    return { country: data.country || "India", currency: mapCountryToCurrency(data.countryCode) };
   } catch (err) {
     console.error("Geolocation error:", err.message);
     return { country: "India", currency: "INR" }; // Default to India/INR
@@ -106,7 +106,7 @@ const symbolToCoinGeckoId = {
   "USDT": "tether",
   "USDC": "usd-coin",
   "HYPE": "hyperliquid",
-  "USDE": "usd-coin",
+  "USDE": "ethena-usde", // Fixed mapping
   "BTC": "bitcoin",
   "ETH": "ethereum",
   "XRP": "ripple",
@@ -176,7 +176,7 @@ async function fetch7DayHistory(symbol) {
         timeout: 10000
       }
     );
-    await delay(20000); // 20s delay to stay under 3 calls/min
+    await delay(20000); // 20s to stay under 3 calls/min
     const prices = data.prices.map(p => p[1]);
     cachedHistory.set(symbol, { prices, timestamp: now });
     console.log(`Fetched 7-day history for ${symbol} successfully`);
