@@ -1,18 +1,22 @@
+```json
 {
   "name": "crypto-scanner",
   "version": "1.0.0",
-  "description": "Crypto scanner with Telegram alerts",
-  "main": "cryptoScanner.js",
+  "description": "Crypto price scanner using CMC and CoinGecko APIs",
+  "main": "crypto_scanner_cmc.js",
   "scripts": {
-    "start": "node cryptoScanner.js"
+    "start": "node crypto_scanner_cmc.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "engines": {
+    "node": ">=18.0.0 <23.0.0"
   },
   "dependencies": {
-    "axios": "^1.7.7",
+    "axios": "^1.7.2",
     "chalk": "^4.1.2",
-    "express": "^4.18.2",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
   },
-  "keywords": [],
   "author": "",
   "license": "ISC"
 }
