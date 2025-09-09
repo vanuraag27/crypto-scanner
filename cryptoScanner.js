@@ -11,17 +11,16 @@ const CMC_API_KEY = process.env.CMC_API_KEY;
 
 // --- State ---
 let cachedHistory = new Map(); // Store 7-day history with timestamp
+let cachedLocalPrices = new Map(); // Store local prices with timestamp
 let predictedCoins = new Set();
 let lastPredictionTime = 0;
 let currentTop20 = []; // Store latest data for web serving
 let userCurrency = "USD"; // Default currency
 let userCountry = "Unknown"; // Default country
 
-// --- Delay helper with exponential backoff ---
-async function delayWithBackoff(ms, attempt = 1) {
-  const maxDelay = 60000; // Max delay of 60 seconds
-  const backoffDelay = Math.min(ms * Math.pow(2, attempt - 1), maxDelay);
-  return new Promise(resolve => setTimeout(resolve, backoffDelay));
+// --- Delay helper ---
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // --- Telegram ---
@@ -126,79 +125,68 @@ const symbolToCoinGeckoId = {
   "LTC": "litecoin"
 };
 
-// --- Fetch local currency prices (CoinGecko) with retry ---
-async function fetchLocalPrice(symbols, currency, maxRetries = 3) {
-  let attempt = 1;
-  while (attempt <= maxRetries) {
-    try {
-      const coinIds = symbols.map(s => symbolToCoinGeckoId[s.toUpperCase()] || s.toLowerCase()).join(',');
-      const { data } = await axios.get("https://api.coingecko.com/api/v3/simple/price", {
-        params: {
-          ids: coinIds,
-          vs_currencies: currency.toLowerCase()
-        },
-        timeout: 5000
-      });
-      await delayWithBackoff(20000, attempt);
-      return data; // Returns { coinId: { currency: price } }
-    } catch (err) {
-      if (err.response && err.response.status === 429) {
-        console.warn(`Rate limit hit for ${symbols} in ${currency}, retrying (${attempt}/${maxRetries})...`);
-        attempt++;
-        if (attempt > maxRetries) {
-          console.error(`Max retries reached for ${symbols} in ${currency}`);
-          return null;
-        }
-        await delayWithBackoff(20000, attempt);
-      } else {
-        console.error(`Error fetching local prices for ${symbols} in ${currency}:`, err.response ? err.response.data : err.message);
-        return null;
-      }
-    }
+// --- Fetch local currency price (CoinGecko) ---
+async function fetchLocalPrice(symbol, currency) {
+  const now = Date.now();
+  const cacheKey = `${symbol}_${currency}`;
+  const cache = cachedLocalPrices.get(cacheKey);
+
+  if (cache && now - cache.timestamp < 60 * 60 * 1000) { // Cache for 1 hour
+    console.log(`Using cached local price for ${symbol} in ${currency}`);
+    return cache.price;
+  }
+
+  try {
+    const coinId = symbolToCoinGeckoId[symbol.toUpperCase()] || symbol.toLowerCase();
+    const { data } = await axios.get("https://api.coingecko.com/api/v3/simple/price", {
+      params: {
+        ids: coinId,
+        vs_currencies: currency.toLowerCase()
+      },
+      timeout: 5000
+    });
+    await delay(20000); // 20s to stay under 3 calls/min
+    const price = data[coinId][currency.toLowerCase()] || null;
+    cachedLocalPrices.set(cacheKey, { price, timestamp: now });
+    console.log(`Fetched local price for ${symbol} in ${currency} successfully`);
+    return price;
+  } catch (err) {
+    console.error(`Error fetching local price for ${symbol} in ${currency}:`, err.response ? err.response.data : err.message);
+    return null;
   }
 }
 
-// --- Fetch 7-day history with caching (CoinGecko API) with retry ---
-async function fetch7DayHistory(symbol, maxRetries = 3) {
+// --- Fetch 7-day history with caching (CoinGecko API) ---
+async function fetch7DayHistory(symbol) {
   const now = Date.now();
   const cache = cachedHistory.get(symbol);
 
-  if (cache && now - cache.timestamp < 30 * 60 * 1000) {
+  if (cache && now - cache.timestamp < 60 * 60 * 1000) { // Cache for 1 hour
     console.log(`Using cached history for ${symbol}`);
     return cache.prices;
   }
 
-  let attempt = 1;
-  while (attempt <= maxRetries) {
-    try {
-      console.log(`Fetching 7-day history for ${symbol} from CoinGecko...`);
-      const coinId = symbolToCoinGeckoId[symbol.toUpperCase()] || symbol.toLowerCase();
-      const { data } = await axios.get(
-        `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart`,
-        {
-          params: { vs_currency: "usd", days: 7, interval: "daily" },
-          timeout: 10000
-        }
-      );
-      await delayWithBackoff(20000, attempt);
-      const prices = data.prices.map(p => p[1]);
-      cachedHistory.set(symbol, { prices, timestamp: now });
-      console.log(`Fetched 7-day history for ${symbol} successfully`);
-      return prices;
-    } catch (err) {
-      if (err.response && err.response.status === 429) {
-        console.warn(`Rate limit hit for ${symbol}, retrying (${attempt}/${maxRetries})...`);
-        attempt++;
-        if (attempt > maxRetries) {
-          console.error(`Max retries reached for ${symbol}`);
-          return [];
-        }
-        await delayWithBackoff(20000, attempt);
-      } else {
-        console.error(`Error fetching 7-day history for ${symbol}:`, err.response ? err.response.data : err.message);
-        return [];
+  try {
+    console.log(`Fetching 7-day history for ${symbol} from CoinGecko...`);
+    const coinId = symbolToCoinGeckoId[symbol.toUpperCase()] || symbol.toLowerCase();
+    const { data } = await axios.get(
+      `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart`,
+      {
+        params: { vs_currency: "usd", days: 7, interval: "daily" },
+        timeout: 10000
       }
+    );
+    await delay(20000); // 20s delay to stay under 3 calls/min
+    const prices = data.prices.map(p => p[1]);
+    cachedHistory.set(symbol, { prices, timestamp: now });
+    console.log(`Fetched 7-day history for ${symbol} successfully`);
+    return prices;
+  } catch (err) {
+    console.error(`Error fetching 7-day history for ${symbol}:`, err.response ? err.response.data : err.message);
+    if (err.response && err.response.status === 429) {
+      console.log(`Rate limit hit for ${symbol}, returning empty prices`);
     }
+    return [];
   }
 }
 
@@ -212,26 +200,30 @@ function estimateNext24hMove(prices) {
   return (totalChange / (prices.length - 1)) * 100;
 }
 
-// --- Predict top coins (every 30 minutes) ---
+// --- Predict top coins (every 1 hour) ---
 async function predictTopCoins(coins, localCurrency) {
   const now = Date.now();
-  if (now - lastPredictionTime < 30 * 60 * 1000) {
+  if (now - lastPredictionTime < 60 * 60 * 1000) { // 1 hour interval
     console.log("Skipping prediction: too soon");
     return;
   }
 
   console.log("Predicting top coins...");
   const predictions = [];
+  // Process only top PREDICTION_TOP_N coins to reduce API calls
   const topCoins = coins.slice(0, config.PREDICTION_TOP_N);
-  const symbols = topCoins.map(coin => coin.symbol);
-  const priceData = await fetchLocalPrice(symbols, localCurrency);
-
   for (const coin of topCoins) {
     const prices = await fetch7DayHistory(coin.symbol);
     const predictedMove = estimateNext24hMove(prices);
-    const coinId = symbolToCoinGeckoId[coin.symbol.toUpperCase()] || coin.symbol.toLowerCase();
-    const localPrice = priceData && priceData[coinId] ? priceData[coinId][localCurrency.toLowerCase()] : null;
-    predictions.push({ ...coin, predictedMove, localPrice });
+    const localPrice = await fetchLocalPrice(coin.symbol, localCurrency);
+    if (predictedMove !== 0 || localPrice !== null) { // Skip invalid predictions
+      predictions.push({ ...coin, predictedMove, localPrice });
+    }
+  }
+
+  if (predictions.length === 0) {
+    console.log("No valid predictions due to API errors, skipping Telegram notification");
+    return;
   }
 
   predictions.sort((a, b) => b.predictedMove - a.predictedMove);
@@ -248,11 +240,6 @@ async function predictTopCoins(coins, localCurrency) {
       return `${c.symbol.toUpperCase()} (${c.name}): ±${move}% ($${usdPrice}, ${localCurrency} ${localPrice})`;
     })
     .join("\n");
-
-  if (topPredicted.every(c => c.predictedMove === 0)) {
-    console.log("No valid predictions due to API errors, skipping Telegram notification");
-    return;
-  }
 
   await sendTelegram(`🔮 Top ${config.PREDICTION_TOP_N} Coins Likely to Move Next 24h (${userCountry}):\n\n${message}`);
   lastPredictionTime = now;
@@ -345,7 +332,7 @@ async function start() {
     } catch (err) {
       console.error("Scan error:", err.message);
     }
-  }, config.REFRESH_INTERVAL || 60000);
+  }, 60 * 60 * 1000); // 1 hour interval
 }
 
 start();
