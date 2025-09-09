@@ -1,3 +1,4 @@
+```javascript
 require('dotenv').config();
 const axios = require("axios");
 const chalk = require("chalk");
@@ -17,9 +18,11 @@ let currentTop20 = []; // Store latest data for web serving
 let userCurrency = "USD"; // Default currency
 let userCountry = "Unknown"; // Default country
 
-// --- Delay helper ---
-function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+// --- Delay helper with exponential backoff ---
+async function delayWithBackoff(ms, attempt = 1) {
+  const maxDelay = 60000; // Max delay of 60 seconds
+  const backoffDelay = Math.min(ms * Math.pow(2, attempt - 1), maxDelay);
+  return new Promise(resolve => setTimeout(resolve, backoffDelay));
 }
 
 // --- Telegram ---
@@ -124,27 +127,40 @@ const symbolToCoinGeckoId = {
   "LTC": "litecoin"
 };
 
-// --- Fetch local currency price (CoinGecko) ---
-async function fetchLocalPrice(symbol, currency) {
-  try {
-    const coinId = symbolToCoinGeckoId[symbol.toUpperCase()] || symbol.toLowerCase();
-    const { data } = await axios.get("https://api.coingecko.com/api/v3/simple/price", {
-      params: {
-        ids: coinId,
-        vs_currencies: currency.toLowerCase()
-      },
-      timeout: 5000
-    });
-    await delay(15000); // 15s to avoid rate limit
-    return data[coinId][currency.toLowerCase()];
-  } catch (err) {
-    console.error(`Error fetching local price for ${symbol} in ${currency}:`, err.response ? err.response.data : err.message);
-    return null;
+// --- Fetch local currency price (CoinGecko) with retry ---
+async function fetchLocalPrice(symbol, currency, maxRetries = 3) {
+  let attempt = 1;
+  while (attempt <= maxRetries) {
+    try {
+      const coinId = symbolToCoinGeckoId[symbol.toUpperCase()] || symbol.toLowerCase();
+      const { data } = await axios.get("https://api.coingecko.com/api/v3/simple/price", {
+        params: {
+          ids: coinId,
+          vs_currencies: currency.toLowerCase()
+        },
+        timeout: 5000
+      });
+      await delayWithBackoff(20000, attempt); // Increased delay to 20s
+      return data[coinId][currency.toLowerCase()];
+    } catch (err) {
+      if (err.response && err.response.status === 429) {
+        console.warn(`Rate limit hit for ${symbol} in ${currency}, retrying (${attempt}/${maxRetries})...`);
+        attempt++;
+        if (attempt > maxRetries) {
+          console.error(`Max retries reached for ${symbol} in ${currency}`);
+          return null;
+        }
+        await delayWithBackoff(20000, attempt);
+      } else {
+        console.error(`Error fetching local price for ${symbol} in ${currency}:`, err.response ? err.response.data : err.message);
+        return null;
+      }
+    }
   }
 }
 
-// --- Fetch 7-day history with caching (CoinGecko API) ---
-async function fetch7DayHistory(symbol) {
+// --- Fetch 7-day history with caching (CoinGecko API) with retry ---
+async function fetch7DayHistory(symbol, maxRetries = 3) {
   const now = Date.now();
   const cache = cachedHistory.get(symbol);
 
@@ -153,27 +169,37 @@ async function fetch7DayHistory(symbol) {
     return cache.prices;
   }
 
-  try {
-    console.log(`Fetching 7-day history for ${symbol} from CoinGecko...`);
-    const coinId = symbolToCoinGeckoId[symbol.toUpperCase()] || symbol.toLowerCase();
-    const { data } = await axios.get(
-      `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart`,
-      {
-        params: { vs_currency: "usd", days: 7, interval: "daily" },
-        timeout: 10000
+  let attempt = 1;
+  while (attempt <= maxRetries) {
+    try {
+      console.log(`Fetching 7-day history for ${symbol} from CoinGecko...`);
+      const coinId = symbolToCoinGeckoId[symbol.toUpperCase()] || symbol.toLowerCase();
+      const { data } = await axios.get(
+        `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart`,
+        {
+          params: { vs_currency: "usd", days: 7, interval: "daily" },
+          timeout: 10000
+        }
+      );
+      await delayWithBackoff(20000, attempt); // Increased delay to 20s
+      const prices = data.prices.map(p => p[1]);
+      cachedHistory.set(symbol, { prices, timestamp: now });
+      console.log(`Fetched 7-day history for ${symbol} successfully`);
+      return prices;
+    } catch (err) {
+      if (err.response && err.response.status === 429) {
+        console.warn(`Rate limit hit for ${symbol}, retrying (${attempt}/${maxRetries})...`);
+        attempt++;
+        if (attempt > maxRetries) {
+          console.error(`Max retries reached for ${symbol}`);
+          return [];
+        }
+        await delayWithBackoff(20000, attempt);
+      } else {
+        console.error(`Error fetching 7-day history for ${symbol}:`, err.response ? err.response.data : err.message);
+        return [];
       }
-    );
-    await delay(15000); // 15s delay to avoid rate limit (4 calls/min)
-    const prices = data.prices.map(p => p[1]);
-    cachedHistory.set(symbol, { prices, timestamp: now });
-    console.log(`Fetched 7-day history for ${symbol} successfully`);
-    return prices;
-  } catch (err) {
-    console.error(`Error fetching 7-day history for ${symbol}:`, err.response ? err.response.data : err.message);
-    if (err.response && err.response.status === 429) {
-      console.log(`Rate limit hit for ${symbol}, returning empty prices`);
     }
-    return [];
   }
 }
 
@@ -214,7 +240,7 @@ async function predictTopCoins(coins, localCurrency) {
     .map(c => {
       const move = c.predictedMove !== undefined ? c.predictedMove.toFixed(2) : "N/A";
       const usdPrice = c.current_price_usd !== undefined ? c.current_price_usd.toFixed(2) : "N/A";
-      const localPrice = c.localPrice !== null ? c.localPrice.toFixed(2) : "N/A";
+      const localPrice = c.localPrice !== null && c.localPrice !== undefined ? c.localPrice.toFixed(2) : "N/A";
       return `${c.symbol.toUpperCase()} (${c.name}): ±${move}% ($${usdPrice}, ${localCurrency} ${localPrice})`;
     })
     .join("\n");
@@ -241,7 +267,7 @@ function generateHTMLDashboard(top20, localCurrency) {
     top20.filter(c => predictedCoins.has(c.id)).forEach(c => {
       const move = c.predictedMove !== undefined ? c.predictedMove.toFixed(2) : "N/A";
       const usdPrice = c.current_price_usd !== undefined ? c.current_price_usd.toFixed(2) : "N/A";
-      const localPrice = c.localPrice !== null ? c.localPrice.toFixed(2) : "N/A";
+      const localPrice = c.localPrice !== null && c.localPrice !== undefined ? c.localPrice.toFixed(2) : "N/A";
       html += `<li>🔮 ${c.symbol.toUpperCase()} (${c.name}): ±${move}% ($${usdPrice}, ${localCurrency} ${localPrice})</li>`;
     });
   }
@@ -319,3 +345,4 @@ async function start() {
 }
 
 start();
+```
