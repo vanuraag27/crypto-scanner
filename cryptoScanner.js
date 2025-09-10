@@ -1,157 +1,85 @@
-// cryptoScanner.js
 const axios = require("axios");
-const chalk = require("chalk");
 const express = require("express");
-const TelegramBot = require("node-telegram-bot-api");
+const bodyParser = require("body-parser");
 const config = require("./config");
+const chalk = require("chalk");
 
 const app = express();
+app.use(bodyParser.json());
+
 const PORT = process.env.PORT || 10000;
 
-const TELEGRAM_ENABLED = process.env.USE_TELEGRAM === "true";
-const BOT_TOKEN = process.env.TELEGRAM_TOKEN || config.BOT_TOKEN;
-const CHAT_ID = process.env.CHAT_ID || config.CHAT_ID;
-const CMC_API_KEY = process.env.CMC_API_KEY || config.CMC_API_KEY;
-const REFRESH_INTERVAL = process.env.REFRESH_INTERVAL
-  ? parseInt(process.env.REFRESH_INTERVAL)
-  : 600000; // default 10 min
+// Telegram webhook endpoint
+app.post("/webhook", async (req, res) => {
+  const message = req.body.message;
+  if (!message || !message.text) {
+    return res.sendStatus(200);
+  }
 
-// ✅ Setup Telegram Bot (polling)
-let bot = null;
-if (TELEGRAM_ENABLED && BOT_TOKEN) {
-  bot = new TelegramBot(BOT_TOKEN, { polling: true });
-  console.log(chalk.yellow("🤖 Telegram bot polling enabled"));
+  const chatId = message.chat.id;
+  const text = message.text.trim();
 
-  bot.onText(/\/start/, (msg) => {
-    const chatId = msg.chat.id;
-    bot.sendMessage(
-      chatId,
-      "👋 Welcome! Crypto Scanner is live.\nYou'll automatically receive updates here."
-    );
-  });
+  if (text === "/start") {
+    await sendMessage(chatId, "🚀 Welcome! You will receive crypto scanner updates here.");
+  }
 
-  bot.onText(/\/help/, (msg) => {
-    const chatId = msg.chat.id;
-    bot.sendMessage(
-      chatId,
-      "ℹ️ Commands:\n/start - Register with the bot\n/help - Show this help\n/status - Show last scan\n/predict - Run a fresh scan now (Top 5 coins only)"
-    );
-  });
+  res.sendStatus(200);
+});
 
-  bot.onText(/\/status/, (msg) => {
-    const chatId = msg.chat.id;
-    bot.sendMessage(chatId, lastStatusMessage || "⚠️ No scan yet.");
-  });
-
-  // ✅ New: Manual scan with /predict (Top 5 only)
-  bot.onText(/\/predict/, async (msg) => {
-    const chatId = msg.chat.id;
-    bot.sendMessage(chatId, "⏳ Running a fresh scan, please wait...");
-
-    const coins = await fetchTopCoins();
-    if (!coins.length) {
-      bot.sendMessage(chatId, "❌ Failed to fetch coins. Try again later.");
-      return;
-    }
-
-    const predictions = predictProfit(coins);
-
-    const top5 = predictions.sort((a, b) => b.estProfit - a.estProfit).slice(0, 5);
-
-    let output = "*🔥 Top 5 Predicted Movers (Next 24h)*\n";
-    output += `⏱️ Updated: ${new Date().toLocaleTimeString()}\n\n`;
-
-    top5.forEach((coin, i) => {
-      output += `${i + 1}. ${coin.symbol} (${coin.name}) - $${coin.price.toFixed(
-        4
-      )} | 24h: ${coin.change.toFixed(2)}% | Est. Profit: ₹${coin.estProfit.toFixed(2)}\n`;
+async function sendMessage(chatId, text) {
+  if (!config.BOT_TOKEN) return;
+  try {
+    await axios.post(`https://api.telegram.org/bot${config.BOT_TOKEN}/sendMessage`, {
+      chat_id: chatId,
+      text
     });
-
-    bot.sendMessage(chatId, output, { parse_mode: "Markdown" });
-  });
+    console.log(chalk.green("📩 Telegram message sent successfully"));
+  } catch (err) {
+    console.error("❌ Telegram send error:", err.response?.data || err.message);
+  }
 }
 
-// --- Global state ---
-let lastStatusMessage = "";
-
-// --- CMC API ---
 async function fetchTopCoins() {
   try {
-    const url =
-      "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest?start=1&limit=20&convert=USD";
-    const res = await axios.get(url, {
-      headers: { "X-CMC_PRO_API_KEY": CMC_API_KEY },
+    const resp = await axios.get("https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest", {
+      params: { start: 1, limit: 20, convert: "USD" },
+      headers: { "X-CMC_PRO_API_KEY": config.CMC_API_KEY }
     });
-
-    return res.data.data.map((coin) => ({
-      symbol: coin.symbol,
-      name: coin.name,
-      price: coin.quote.USD.price,
-      change: coin.quote.USD.percent_change_24h,
-    }));
+    return resp.data.data || [];
   } catch (err) {
-    console.error("❌ Error fetching top coins:", err.response?.data || err.message);
+    console.error("❌ Error fetching coins:", err.response?.data || err.message);
     return [];
   }
 }
 
-// --- Prediction Logic (simple) ---
-function predictProfit(coins) {
-  return coins.map((coin) => {
-    const estProfit = (coin.change / 100) * 10000; // assume ₹10k base
-    return { ...coin, estProfit };
-  });
-}
-
-// --- Telegram Sender ---
-async function sendTelegramMessage(message) {
-  if (!TELEGRAM_ENABLED || !BOT_TOKEN || !CHAT_ID) {
-    console.log("⚠️ Telegram disabled or not configured");
-    return;
-  }
-  try {
-    await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      chat_id: CHAT_ID,
-      text: message,
-      parse_mode: "Markdown",
-    });
-    console.log("📩 Telegram message sent successfully");
-  } catch (err) {
-    console.error("❌ Telegram error:", err.response?.data || err.message);
-  }
-}
-
-// --- Scanner ---
-async function runScan() {
+async function scanAndNotify() {
   console.log("Starting scan...");
   const coins = await fetchTopCoins();
   if (!coins.length) return;
 
-  const predictions = predictProfit(coins);
+  let text = "*🚀 Crypto Scanner Dashboard*\n";
+  text += `⏱️ Updated: ${new Date().toLocaleTimeString()}\n`;
 
-  let output = "*🚀 Crypto Scanner Dashboard*\n";
-  output += `⏱️ Updated: ${new Date().toLocaleTimeString()}\n\n`;
-  predictions.forEach((coin, i) => {
-    output += `${i + 1}. ${coin.symbol} - $${coin.price.toFixed(4)} | 24h: ${coin.change.toFixed(
-      2
-    )}% | Est. Profit: ₹${coin.estProfit.toFixed(2)}\n`;
+  coins.forEach((coin, i) => {
+    const price = coin.quote.USD.price.toFixed(4);
+    const change = coin.quote.USD.percent_change_24h.toFixed(2);
+    const estProfit = (coin.quote.USD.percent_change_24h * 100).toFixed(2);
+    text += `${i + 1}. ${coin.symbol} - $${price} | 24h: ${change}% | Est. Profit: ₹${estProfit}\n`;
   });
 
-  console.log(output);
-  lastStatusMessage = output;
+  console.log(text);
 
-  await sendTelegramMessage(output);
+  if (config.USE_TELEGRAM && config.CHAT_ID) {
+    await sendMessage(config.CHAT_ID, text);
+  }
 }
 
-// --- Run First Scan ---
-runScan();
-setInterval(runScan, REFRESH_INTERVAL);
+// Schedule scan
+setInterval(scanAndNotify, config.REFRESH_INTERVAL);
+scanAndNotify();
 
-// --- Express Server ---
-app.get("/", (req, res) => {
-  res.send("🚀 Crypto Scanner is running");
-});
-
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`🌍 Server running on port ${PORT}`);
+  console.log(chalk.cyan("Webhook mode enabled — set this URL in Telegram:"));
+  console.log(`👉 https://crypto-scanner-jaez.onrender.com/webhook`);
 });
