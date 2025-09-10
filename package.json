@@ -4,17 +4,14 @@
   "description": "Crypto scanner with Telegram alerts",
   "main": "cryptoScanner.js",
   "scripts": {
-    "start": "node cryptoScanner.js",
-    "test-telegram": "node testTelegram.js"
+    "start": "node cryptoScanner.js"
   },
   "dependencies": {
     "axios": "^1.7.7",
     "chalk": "^4.1.2",
-    "dotenv": "^16.4.5",
     "express": "^4.18.2",
-    "node-telegram-bot-api": "^0.66.0"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC"
+    "dotenv": "^16.4.5",
+    "body-parser": "^1.20.2",
+    "node-telegram-bot-api": "^0.61.0"
+  }
 }
