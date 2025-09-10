@@ -2,25 +2,22 @@ const axios = require("axios");
 const config = require("./config");
 
 async function testTelegram() {
-  if (!config.BOT_TOKEN || !config.CHAT_ID) {
-    console.error("❌ BOT_TOKEN or CHAT_ID missing");
+  const token = config.BOT_TOKEN;
+  const chatId = config.CHAT_ID;
+
+  if (!token || !chatId) {
+    console.error("❌ Telegram token or chat ID missing.");
     return;
   }
 
   try {
-    const res = await axios.post(`https://api.telegram.org/bot${config.BOT_TOKEN}/sendMessage`, {
-      chat_id: config.CHAT_ID,
-      text: "✅ Test message from Crypto Scanner bot",
-      parse_mode: "Markdown"
+    await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
+      chat_id: chatId,
+      text: "✅ Telegram bot test successful"
     });
-
-    if (res.data.ok) {
-      console.log("📩 Test message sent successfully");
-    } else {
-      console.error("❌ Failed to send test:", res.data);
-    }
+    console.log("📩 Test message sent successfully!");
   } catch (err) {
-    console.error("❌ Telegram test error:", err.response?.data || err.message);
+    console.error("❌ Error sending test message:", err.response?.data || err.message);
   }
 }
 
