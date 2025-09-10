@@ -1,23 +1,23 @@
-// testTelegram.js
-const TelegramBot = require("node-telegram-bot-api");
+const axios = require("axios");
 const config = require("./config");
 
-const BOT_TOKEN = process.env.TELEGRAM_TOKEN || config.BOT_TOKEN;
-const CHAT_ID = process.env.CHAT_ID || config.CHAT_ID;
-
-if (!BOT_TOKEN || !CHAT_ID) {
-  console.error("❌ Telegram token or chat ID not configured.");
-  process.exit(1);
-}
-
-const bot = new TelegramBot(BOT_TOKEN, { polling: false });
-
 async function testTelegram() {
+  const token = config.BOT_TOKEN;
+  const chatId = config.CHAT_ID;
+
+  if (!token || !chatId) {
+    console.error("❌ Missing TELEGRAM_TOKEN or CHAT_ID");
+    return;
+  }
+
   try {
-    await bot.sendMessage(CHAT_ID, "✅ Telegram bot test successful (from testTelegram.js)");
-    console.log("📩 Message sent successfully!");
+    await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
+      chat_id: chatId,
+      text: "✅ Test message: Telegram bot is working!"
+    });
+    console.log("📩 Test message sent successfully!");
   } catch (err) {
-    console.error("❌ Error sending message:", err.response?.body || err.message);
+    console.error("❌ Error:", err.response?.data || err.message);
   }
 }
 
