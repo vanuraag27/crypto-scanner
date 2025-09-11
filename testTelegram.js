@@ -6,18 +6,18 @@ async function testTelegram() {
   const chatId = config.CHAT_ID;
 
   if (!token || !chatId) {
-    console.error("❌ Telegram token or chat ID missing.");
+    console.error("❌ Telegram token or chat ID missing");
     return;
   }
 
   try {
     await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
       chat_id: chatId,
-      text: "✅ Telegram bot test successful"
+      text: "✅ Telegram bot test successful!"
     });
-    console.log("📩 Test message sent successfully!");
+    console.log("Message sent successfully!");
   } catch (err) {
-    console.error("❌ Error sending test message:", err.response?.data || err.message);
+    console.error("Error sending message:", err.response ? err.response.data : err.message);
   }
 }
 
