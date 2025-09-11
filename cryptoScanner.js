@@ -8,29 +8,22 @@ const schedule = require("node-schedule");
 const app = express();
 app.use(express.json());
 
-const baselinePath = path.join(__dirname, "baseline.json");
-let baseline = loadBaseline();
+// --- State ---
+let baseline = {};
 let alertedCoins = new Set();
 
-// --- Load baseline from file ---
-function loadBaseline() {
-  if (fs.existsSync(baselinePath)) {
-    try {
-      return JSON.parse(fs.readFileSync(baselinePath, "utf8"));
-    } catch {
-      return { date: null, coins: {} };
-    }
-  }
-  return { date: null, coins: {} };
+// --- Helpers ---
+function getISTDate() {
+  return new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
 }
 
-// --- Save baseline to file ---
-function saveBaseline() {
-  fs.writeFileSync(baselinePath, JSON.stringify(baseline, null, 2));
+function getLogFileName() {
+  const date = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+  return path.join(__dirname, `alerts-${date}.log`);
 }
 
-// --- Telegram helper ---
 async function sendMessage(chatId, text, markdown = false) {
+  if (!config.USE_TELEGRAM || !config.BOT_TOKEN) return;
   try {
     await axios.post(`https://api.telegram.org/bot${config.BOT_TOKEN}/sendMessage`, {
       chat_id: chatId,
@@ -42,146 +35,172 @@ async function sendMessage(chatId, text, markdown = false) {
   }
 }
 
-// --- Auto Webhook Setup ---
-async function setWebhook() {
-  if (!config.BOT_TOKEN) return;
-  const webhookUrl = `${config.BASE_URL}/webhook`;
-
+async function fetchTopCoins() {
   try {
-    const res = await axios.get(
-      `https://api.telegram.org/bot${config.BOT_TOKEN}/setWebhook?url=${webhookUrl}`
-    );
-    if (res.data.ok) {
-      console.log(`✅ Webhook set: ${webhookUrl}`);
-    } else {
-      console.error("❌ Failed to set webhook:", res.data);
-    }
+    const res = await axios.get("https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest", {
+      headers: { "X-CMC_PRO_API_KEY": config.CMC_API_KEY },
+      params: { start: 1, limit: 50, convert: "USD" }
+    });
+    return res.data.data || [];
   } catch (err) {
-    console.error("❌ Error setting webhook:", err.message);
+    console.error("❌ Error fetching CMC:", err.response?.data || err.message);
+    return [];
   }
 }
 
-// --- Handle Telegram Webhook ---
-app.post("/webhook", async (req, res) => {
-  const message = req.body.message;
-  if (!message || !message.text) return res.sendStatus(200);
+// --- Baseline ---
+async function setBaseline() {
+  const coins = await fetchTopCoins();
+  if (!coins.length) return;
 
-  const chatId = message.chat.id;
-  const text = message.text.trim();
+  const sorted = coins.sort((a, b) =>
+    b.quote.USD.percent_change_24h - a.quote.USD.percent_change_24h
+  );
+  const top10 = sorted.slice(0, 10);
+
+  baseline = {
+    time: getISTDate(),
+    coins: {}
+  };
+
+  top10.forEach(c => {
+    baseline.coins[c.symbol] = {
+      name: c.name,
+      price: c.quote.USD.price,
+      change24h: c.quote.USD.percent_change_24h
+    };
+  });
+
+  fs.writeFileSync("baseline.json", JSON.stringify(baseline, null, 2));
+  fs.writeFileSync(getLogFileName(), `🚀 Alerts Log for ${getISTDate()}\n\n`);
+
+  let msg = `✅ *Baseline set (6 AM IST ${new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" })})*\nMonitoring top 10:\n`;
+  top10.forEach((c, i) => {
+    msg += `${i + 1}. ${c.symbol} - $${c.quote.USD.price.toFixed(2)} (24h: ${c.quote.USD.percent_change_24h.toFixed(2)}%)\n`;
+  });
+
+  alertedCoins.clear();
+  await sendMessage(config.CHAT_ID, msg, true);
+  console.log(msg);
+}
+
+// --- Alerts ---
+async function checkAlerts() {
+  if (!baseline || !baseline.coins) return;
+
+  const coins = await fetchTopCoins();
+  if (!coins.length) return;
+
+  const logFile = getLogFileName();
+
+  for (const coin of coins) {
+    if (!baseline.coins[coin.symbol]) continue;
+
+    const baselinePrice = baseline.coins[coin.symbol].price;
+    const currentPrice = coin.quote.USD.price;
+    const dropPercent = ((baselinePrice - currentPrice) / baselinePrice) * 100;
+
+    if (dropPercent >= 10 && !alertedCoins.has(coin.symbol)) {
+      const alert = `⚠️ ALERT: ${coin.symbol} dropped ${dropPercent.toFixed(2)}% since 6 AM baseline.\n💰 Current: $${currentPrice.toFixed(2)} | Baseline: $${baselinePrice.toFixed(2)}\n⏱️ ${getISTDate()}`;
+
+      fs.appendFileSync(logFile, alert + "\n\n");
+      await sendMessage(config.CHAT_ID, alert, false);
+
+      alertedCoins.add(coin.symbol);
+      console.log(alert);
+    }
+  }
+}
+
+// --- Daily Summary ---
+async function sendDailySummary() {
+  if (!baseline || !baseline.coins) return;
+
+  const coins = await fetchTopCoins();
+  if (!coins.length) return;
+
+  let summary = `📊 *Daily Summary (10 PM IST ${new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" })})*\nPerformance ranked best → worst:\n`;
+
+  const performance = Object.values(baseline.coins).map(base => {
+    const coin = coins.find(c => c.name === base.name || c.symbol === base.symbol);
+    if (!coin) return null;
+    const change = ((coin.quote.USD.price - base.price) / base.price) * 100;
+    return {
+      symbol: coin.symbol,
+      price: coin.quote.USD.price,
+      change
+    };
+  }).filter(Boolean);
+
+  performance.sort((a, b) => b.change - a.change);
+
+  performance.forEach((p, i) => {
+    summary += `${i + 1}. ${p.symbol} - $${p.price.toFixed(2)} | Change: ${p.change.toFixed(2)}%\n`;
+  });
+
+  await sendMessage(config.CHAT_ID, summary, true);
+  console.log(summary);
+}
+
+// --- Telegram Webhook ---
+app.post("/webhook", async (req, res) => {
+  const msg = req.body.message;
+  if (!msg || !msg.text) return res.sendStatus(200);
+
+  const chatId = msg.chat.id;
+  const text = msg.text.trim();
 
   if (text === "/start") {
-    await sendMessage(
-      chatId,
-      "👋 Welcome! You will now receive crypto scanner updates here.\n\nUse:\n`/status` → Check scanner\n`/top10` → Show today’s baseline\n`/help` → Commands",
-      true
-    );
+    await sendMessage(chatId, "👋 Welcome! You’ll now receive updates.\n\nUse:\n`/status` → Check scanner\n`/top10` → Today’s baseline\n`/alerts` → Today’s alerts log\n/help → Commands", true);
   } else if (text === "/status") {
-    await sendMessage(
-      chatId,
-      `✅ Scanner is running.\n📊 Baseline set: ${baseline.date || "Not yet"}\nMonitored coins: ${Object.keys(baseline.coins).length}`,
-      false
-    );
-  } else if (text === "/help") {
-    await sendMessage(
-      chatId,
-      "📖 *Commands:*\n/start - Start updates\n/status - Scanner status\n/top10 - Show today’s baseline top 10\n/help - This menu",
-      true
-    );
+    await sendMessage(chatId, `✅ Scanner running.\n⏱️ Last baseline: ${baseline.time || "Not set yet"}`, false);
   } else if (text === "/top10") {
-    if (!baseline.date) {
-      await sendMessage(chatId, "⚠️ No baseline set yet. Wait for 6 AM IST.", false);
+    if (!baseline || !baseline.coins) {
+      await sendMessage(chatId, "❌ No baseline set yet.", false);
     } else {
-      let msg = `*📊 Top 10 Baseline (6 AM IST ${baseline.date})*\n`;
-      Object.entries(baseline.coins).forEach(([sym, data], i) => {
-        msg += `${i + 1}. ${sym} - $${data.price.toFixed(2)} (24h: ${data.change.toFixed(2)}%)\n`;
-      });
+      let msg = `📌 *Today’s Baseline (6 AM IST)*\n`;
+      let i = 1;
+      for (const [sym, data] of Object.entries(baseline.coins)) {
+        msg += `${i++}. ${sym} - $${data.price.toFixed(2)} (24h: ${data.change24h.toFixed(2)}%)\n`;
+      }
       await sendMessage(chatId, msg, true);
     }
+  } else if (text === "/alerts") {
+    try {
+      const logFile = getLogFileName();
+      if (fs.existsSync(logFile)) {
+        const logs = fs.readFileSync(logFile, "utf8") || "No alerts yet today.";
+        await sendMessage(chatId, `📜 *Today’s Alerts:*\n\n${logs}`, true);
+      } else {
+        await sendMessage(chatId, "📭 No alerts yet today.", false);
+      }
+    } catch (err) {
+      await sendMessage(chatId, "❌ Error reading alerts log.", false);
+    }
+  } else if (text === "/help") {
+    await sendMessage(chatId, "📖 *Commands:*\n/start - Start updates\n/status - Check scanner\n/top10 - Today’s baseline\n/alerts - Today’s alerts log\n/help - Show this help menu", true);
   } else {
-    await sendMessage(chatId, "⚠️ Unknown command. Use `/help`.", false);
+    await sendMessage(chatId, "⚠️ Unknown command. Type /help to see commands.", false);
   }
 
   res.sendStatus(200);
 });
 
-// --- Fetch market data ---
-async function fetchTopCoins(limit = 20) {
-  const res = await axios.get("https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest", {
-    headers: { "X-CMC_PRO_API_KEY": config.CMC_API_KEY },
-    params: { start: 1, limit, convert: "USD" }
-  });
-  return res.data.data;
-}
+// --- Scheduler ---
+schedule.scheduleJob("0 6 * * *", { tz: "Asia/Kolkata" }, setBaseline);
+schedule.scheduleJob("0 22 * * *", { tz: "Asia/Kolkata" }, sendDailySummary);
+setInterval(checkAlerts, config.REFRESH_INTERVAL);
 
-// --- Set daily baseline at 6 AM IST ---
-schedule.scheduleJob("0 6 * * *", { tz: "Asia/Kolkata" }, async () => {
-  console.log("⏰ Setting baseline (6 AM IST)...");
-  try {
-    const coins = await fetchTopCoins(50);
-
-    // rank by % gainers (last 24h)
-    const sorted = coins
-      .sort((a, b) => b.quote.USD.percent_change_24h - a.quote.USD.percent_change_24h)
-      .slice(0, 10);
-
-    baseline.date = new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
-    baseline.coins = {};
-    sorted.forEach((coin) => {
-      baseline.coins[coin.symbol] = {
-        price: coin.quote.USD.price,
-        change: coin.quote.USD.percent_change_24h
-      };
-    });
-
-    saveBaseline();
-    alertedCoins.clear();
-
-    let msg = `*✅ Baseline set (6 AM IST ${baseline.date})*\nMonitoring top 10:\n`;
-    sorted.forEach((coin, i) => {
-      msg += `${i + 1}. ${coin.symbol} - $${coin.quote.USD.price.toFixed(2)} (24h: ${coin.quote.USD.percent_change_24h.toFixed(2)}%)\n`;
-    });
-
-    if (config.USE_TELEGRAM) await sendMessage(config.CHAT_ID, msg, true);
-    console.log("📊 Baseline saved & sent");
-  } catch (err) {
-    console.error("❌ Error setting baseline:", err.response?.data || err.message);
-  }
-});
-
-// --- Monitor coins ---
-async function monitorCoins() {
-  if (!baseline.date) {
-    console.log("⚠️ No baseline yet, skipping monitor.");
-    return;
-  }
-  try {
-    const symbols = Object.keys(baseline.coins);
-    const coins = await fetchTopCoins(50);
-    const map = {};
-    coins.forEach((c) => (map[c.symbol] = c));
-
-    for (const sym of symbols) {
-      const base = baseline.coins[sym];
-      const now = map[sym];
-      if (!now) continue;
-
-      const dropPct = ((now.quote.USD.price - base.price) / base.price) * 100;
-      if (dropPct <= -10 && !alertedCoins.has(sym)) {
-        alertedCoins.add(sym);
-        const msg = `🚨 *ALERT: ${sym} dropped*\nBaseline: $${base.price.toFixed(2)}\nNow: $${now.quote.USD.price.toFixed(2)}\nChange: ${dropPct.toFixed(2)}%\nTime: ${new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" })}`;
-        if (config.USE_TELEGRAM) await sendMessage(config.CHAT_ID, msg, true);
-        console.log(msg);
-      }
-    }
-  } catch (err) {
-    console.error("❌ Error monitoring coins:", err.response?.data || err.message);
-  }
-  setTimeout(monitorCoins, config.REFRESH_INTERVAL);
-}
-
-// --- Start server ---
+// --- Server ---
 app.listen(config.PORT, async () => {
   console.log(`🌍 Server running on port ${config.PORT}`);
-  await setWebhook();
-  monitorCoins();
+  // Set webhook
+  try {
+    const webhookUrl = `${config.BASE_URL}/webhook`;
+    await axios.get(`https://api.telegram.org/bot${config.BOT_TOKEN}/setWebhook?url=${webhookUrl}`);
+    console.log(`✅ Webhook set: ${webhookUrl}`);
+  } catch (err) {
+    console.error("❌ Webhook setup error:", err.message);
+  }
+  console.log("🔍 Scanner initialized");
 });
