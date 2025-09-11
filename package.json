@@ -3,11 +3,10 @@
   "version": "1.0.0",
   "main": "cryptoScanner.js",
   "scripts": {
-    "start": "node cryptoScanner.js",
-    "test:telegram": "node testTelegram.js"
+    "start": "node cryptoScanner.js"
   },
   "dependencies": {
-    "axios": "^1.6.7",
+    "axios": "^1.7.2",
     "express": "^4.19.2",
     "node-cron": "^3.0.3"
   }
