@@ -1,14 +1,16 @@
 {
   "name": "crypto-scanner",
-  "version": "1.0.0",
-  "description": "Crypto Scanner with Telegram alerts and scheduled baseline",
+  "version": "1.1.0",
+  "description": "Crypto scanner with Telegram alerts, baseline, and drop monitoring",
   "main": "cryptoScanner.js",
   "scripts": {
-    "start": "node cryptoScanner.js"
+    "start": "node cryptoScanner.js",
+    "test-telegram": "node testTelegram.js"
   },
   "dependencies": {
-    "axios": "^1.6.8",
+    "axios": "^1.7.7",
+    "dotenv": "^16.4.5",
     "express": "^4.18.2",
-    "node-schedule": "^2.1.1"
+    "node-cron": "^3.0.3"
   }
 }
