@@ -1,8 +1,6 @@
 module.exports = {
-  BOT_TOKEN: process.env.TELEGRAM_TOKEN || "your-telegram-bot-token",
-  CHAT_ID: process.env.CHAT_ID || "your-default-chat-id", // group/channel ID
-  ADMIN_ID: process.env.ADMIN_ID || "your-admin-user-id", // only this user gets admin confirmations
-  CMC_API_KEY: process.env.CMC_API_KEY || "your-cmc-api-key",
-  PORT: process.env.PORT || 10000,
-  REFRESH_INTERVAL: 10 * 60 * 1000 // 10 mins for alert checking
+  BOT_TOKEN: "YOUR_TELEGRAM_BOT_TOKEN",
+  CHAT_ID: "YOUR_TELEGRAM_CHAT_ID", // group or channel ID
+  ADMIN_ID: "YOUR_TELEGRAM_USER_ID", // only this user can run admin commands
+  API_URL: "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=volume_desc&per_page=50&page=1&sparkline=false"
 };
