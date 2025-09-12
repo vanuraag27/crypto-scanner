@@ -1,6 +1,12 @@
 module.exports = {
-  BOT_TOKEN: "YOUR_TELEGRAM_BOT_TOKEN",
-  CHAT_ID: "YOUR_TELEGRAM_CHAT_ID", // group or channel ID
-  ADMIN_ID: "YOUR_TELEGRAM_USER_ID", // only this user can run admin commands
-  API_URL: "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=volume_desc&per_page=50&page=1&sparkline=false"
+  BOT_TOKEN: process.env.TELEGRAM_TOKEN || "your_bot_token",
+  CHAT_ID: process.env.CHAT_ID || "your_chat_id",
+  CMC_API_KEY: process.env.CMC_API_KEY || "your_cmc_api_key",
+  BASE_URL: process.env.BASE_URL || "https://crypto-scanner-jaez.onrender.com",
+  PORT: process.env.PORT || 10000,
+  REFRESH_INTERVAL: process.env.REFRESH_INTERVAL || 600000, // 10 min default
+  USE_TELEGRAM: process.env.USE_TELEGRAM === "true" || true,
+
+  // 🔐 Admin ID → must be set to your Telegram user ID
+  ADMIN_ID: process.env.ADMIN_ID || "123456789"
 };
