@@ -1,214 +1,88 @@
-// cryptoScanner.js
+// cryptoScanner.js (Webhook-only mode, Render-ready)
+
 const express = require("express");
-const bodyParser = require("body-parser");
-const fs = require("fs");
-const axios = require("axios");
-const cron = require("node-cron");
-const moment = require("moment-timezone");
 const { Telegraf } = require("telegraf");
+const fs = require("fs");
+const path = require("path");
 
-const {
-  TELEGRAM_TOKEN,
-  CHAT_ID,
-  ADMIN_ID,
-  CMC_API_KEY,
-  REFRESH_INTERVAL,
-  BASELINE_HOUR,
-  BASELINE_MINUTE
-} = require("./config");
+// === Load ENV from Render ===
+const BOT_TOKEN = process.env.TELEGRAM_TOKEN;
+const CHAT_ID = process.env.CHAT_ID;
+const ADMIN_ID = process.env.ADMIN_ID;
+const PORT = process.env.PORT || 10000;
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL; // e.g. https://crypto-scanner-jaez.onrender.com
 
-const app = express();
-app.use(bodyParser.json());
-
-// Persistence file
-const baselineFile = "./baseline.json";
-let persistence = {
-  baselineDate: null,
-  alertsBaseline: null,
-  savedChat: null,
-  coins: []
-};
-
-// Load persistence
-if (fs.existsSync(baselineFile)) {
-  persistence = JSON.parse(fs.readFileSync(baselineFile, "utf8"));
-  console.log("Loaded persistence:", persistence);
+if (!BOT_TOKEN || !RENDER_URL) {
+  console.error("❌ TELEGRAM_TOKEN or RENDER_EXTERNAL_URL missing in environment");
+  process.exit(1);
 }
 
-// Save persistence
-function savePersistence() {
-  fs.writeFileSync(baselineFile, JSON.stringify(persistence, null, 2));
-}
+// === Setup bot ===
+const bot = new Telegraf(BOT_TOKEN);
 
-// Telegram bot
-const bot = new Telegraf(TELEGRAM_TOKEN);
-
-// Express webhook endpoint
-app.post("/webhook", (req, res) => {
-  bot.handleUpdate(req.body);
-  res.sendStatus(200);
-});
-
-// --- Helper: format IST time ---
-function nowIST() {
-  return moment().tz("Asia/Kolkata");
-}
-
-// --- Set Baseline ---
-async function setBaseline(manual = false) {
-  try {
-    const response = await axios.get(
-      "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest",
-      {
-        headers: { "X-CMC_PRO_API_KEY": CMC_API_KEY },
-        params: { start: 1, limit: 10, convert: "USD" }
-      }
-    );
-
-    const top10 = response.data.data.map(c => ({
-      symbol: c.symbol,
-      price: c.quote.USD.price,
-      change: c.quote.USD.percent_change_24h
-    }));
-
-    persistence.baselineDate = nowIST().format("YYYY-MM-DD");
-    persistence.coins = top10;
-    persistence.alertsBaseline = {};
-    savePersistence();
-
-    const time = nowIST().format("D/M/YYYY, h:mm:ss a");
-    const baselineMsg = `${manual ? "✅ Manual" : "✅ Auto"} baseline set — ${time}\nMonitoring top 10:\n${top10
-      .map(
-        (c, i) =>
-          `${i + 1}. ${c.symbol} — $${c.price.toFixed(4)} (24h: ${c.change.toFixed(2)}%)`
-      )
-      .join("\n")}`;
-
-    await bot.telegram.sendMessage(CHAT_ID, baselineMsg);
-    console.log("Baseline set at:", time);
-  } catch (err) {
-    console.error("Error setting baseline:", err.message);
-  }
-}
-
-// --- Scheduler for Baseline ---
-cron.schedule(
-  `${BASELINE_MINUTE} ${BASELINE_HOUR} * * *`,
-  () => {
-    console.log(`⏰ Running scheduled baseline at ${BASELINE_HOUR}:${BASELINE_MINUTE} IST`);
-    setBaseline(false);
-  },
-  { timezone: "Asia/Kolkata" }
-);
-
-// --- Telegram Commands ---
-bot.start(async ctx => {
-  persistence.savedChat = ctx.chat.id;
-  savePersistence();
-  await ctx.reply(
-    "👋 Welcome! You will receive crypto scanner updates here.\n\n📌 Commands:\n" +
-      "/start - register this chat\n" +
-      "/status - scanner & baseline status\n" +
-      "/top10 - show today's baseline\n" +
-      "/profit - ranked % profit since baseline\n" +
-      "/alerts - list current alerts\n" +
-      "/setbaseline - admin only (force baseline)\n" +
-      "/clearhistory - admin only (reset alerts)"
+// === Basic command handlers ===
+bot.start((ctx) => {
+  ctx.reply(
+    "👋 Welcome! You will receive crypto scanner updates here.\n\n" +
+      "📌 Commands:\n" +
+      "/status – scanner & baseline status\n" +
+      "/top10 – show today's baseline\n" +
+      "/profit – ranked % profit since baseline\n" +
+      "/alerts – list current alerts\n" +
+      "/setbaseline – (admin only)\n" +
+      "/clearhistory – (admin only)"
   );
 });
 
-bot.command("setbaseline", async ctx => {
-  if (ctx.from.id.toString() !== ADMIN_ID) return ctx.reply("⛔ Admin only.");
-  await setBaseline(true);
+bot.command("status", (ctx) => {
+  ctx.reply("✅ Scanner running.\n(Baseline check placeholder).");
 });
 
-bot.command("status", async ctx => {
-  const baselineDay = persistence.baselineDate || "N/A";
-  const msg = `✅ Scanner running.\nBaseline day: ${baselineDay}\nActive alerts today: ${
-    persistence.alertsBaseline ? Object.keys(persistence.alertsBaseline).length : 0
-  }`;
-  ctx.reply(msg);
+bot.command("top10", (ctx) => {
+  ctx.reply("📊 Top 10 coins (placeholder).");
 });
 
-bot.command("alerts", async ctx => {
-  if (!persistence.baselineDate) {
-    return ctx.reply("⚠️ Baseline not set yet.");
+bot.command("profit", (ctx) => {
+  ctx.reply("📈 Profit report (placeholder).");
+});
+
+bot.command("alerts", (ctx) => {
+  ctx.reply("🔔 Alerts report (placeholder).");
+});
+
+bot.command("setbaseline", (ctx) => {
+  if (ctx.from.id.toString() !== ADMIN_ID) {
+    return ctx.reply("❌ You are not allowed to use this command.");
   }
-  const keys = Object.keys(persistence.alertsBaseline || {});
-  if (keys.length === 0) {
-    return ctx.reply(`🔔 Alerts for baseline ${persistence.baselineDate}:\nNone`);
-  }
-  const msg = `🔔 Alerts for baseline ${persistence.baselineDate}:\n${keys
-    .map(k => `• ${k}: ${persistence.alertsBaseline[k]}`)
-    .join("\n")}`;
-  ctx.reply(msg);
+  ctx.reply("✅ Manual baseline set (placeholder).");
 });
 
-bot.command("clearhistory", async ctx => {
-  if (ctx.from.id.toString() !== ADMIN_ID) return ctx.reply("⛔ Admin only.");
-  persistence.alertsBaseline = {};
-  savePersistence();
-  ctx.reply("🗑️ Alert history cleared for today.");
+bot.command("clearhistory", (ctx) => {
+  if (ctx.from.id.toString() !== ADMIN_ID) {
+    return ctx.reply("❌ You are not allowed to use this command.");
+  }
+  ctx.reply("🧹 Alerts cleared for today (placeholder).");
 });
 
-bot.command("top10", async ctx => {
-  if (!persistence.baselineDate || persistence.coins.length === 0) {
-    return ctx.reply("⚠️ Baseline not set yet. Only at baseline hour or admin /setbaseline.");
-  }
-  const msg = `📊 Baseline Top 10 (day: ${persistence.baselineDate})\n${persistence.coins
-    .map(
-      (c, i) =>
-        `${i + 1}. ${c.symbol} — $${c.price.toFixed(4)} (24h: ${c.change.toFixed(2)}%)`
-    )
-    .join("\n")}`;
-  ctx.reply(msg);
-});
+// === Express server with webhook ===
+const app = express();
 
-bot.command("profit", async ctx => {
-  if (!persistence.baselineDate || persistence.coins.length === 0) {
-    return ctx.reply("⚠️ Baseline not set yet. Only at baseline hour or admin /setbaseline.");
-  }
+// attach webhook callback
+app.use(bot.webhookCallback("/webhook"));
+
+// set webhook when server starts
+(async () => {
   try {
-    const response = await axios.get(
-      "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest",
-      {
-        headers: { "X-CMC_PRO_API_KEY": CMC_API_KEY },
-        params: { start: 1, limit: 10, convert: "USD" }
-      }
-    );
-    const latest = response.data.data;
-    const profits = persistence.coins.map(base => {
-      const now = latest.find(c => c.symbol === base.symbol);
-      if (!now) return null;
-      const diff = ((now.quote.USD.price - base.price) / base.price) * 100;
-      return { symbol: base.symbol, baseline: base.price, current: now.quote.USD.price, profit: diff };
-    }).filter(Boolean);
-
-    const msg = `📈 Profit since baseline (${persistence.baselineDate}):\n${profits
-      .sort((a, b) => b.profit - a.profit)
-      .map(
-        (p, i) =>
-          `${i + 1}. ${p.symbol} → ${p.profit.toFixed(2)}% (from $${p.baseline.toFixed(
-            4
-          )} to $${p.current.toFixed(4)})`
-      )
-      .join("\n")}`;
-    ctx.reply(msg);
+    const webhookUrl = `${RENDER_URL}/webhook`;
+    await bot.telegram.setWebhook(webhookUrl);
+    console.log(`✅ Webhook set to ${webhookUrl}`);
   } catch (err) {
-    ctx.reply("❌ Error fetching profit data.");
+    console.error("❌ Error setting webhook:", err);
   }
-});
+})();
 
-// --- Start Server & Bot ---
-const PORT = process.env.PORT || 10000;
+app.get("/", (req, res) => res.send("Crypto Scanner bot is live ✅"));
+
 app.listen(PORT, () => {
   console.log(`🌍 Server running on port ${PORT}`);
-  console.log(`🔍 Scanner initialized.`);
-  console.log(
-    `📅 Baseline will be set automatically each day at ${BASELINE_HOUR}:${BASELINE_MINUTE
-      .toString()
-      .padStart(2, "0")} IST, or by admin /setbaseline.`
-  );
 });
-
-bot.launch();
