@@ -1,6 +1,5 @@
 {
-  "baselineDate": null,
-  "alertsBaseline": null,
-  "savedChat": null,
+  "date": null,
+  "setAt": null,
   "coins": []
 }
