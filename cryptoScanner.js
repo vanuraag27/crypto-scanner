@@ -1,4 +1,6 @@
 // cryptoScanner.js
+console.log("[DEBUG] TELEGRAM_TOKEN:", process.env.TELEGRAM_TOKEN ? "Loaded ✅" : "Missing ❌");
+console.log("[DEBUG] BASE_URL:", process.env.BASE_URL);
 const express = require("express");
 const { Telegraf } = require("telegraf");
 const axios = require("axios");
