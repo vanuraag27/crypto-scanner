@@ -1,46 +1,24 @@
 // testTelegram.js
-const fs = require("fs");
-const axios = require("axios");
-const config = require("./config");
+const { TELEGRAM_TOKEN, CHAT_ID } = require("./config");
+const { Telegraf } = require("telegraf");
 
-async function getSavedChatId() {
-  try {
-    const file = "./chat.json";
-    if (fs.existsSync(file)) {
-      const v = JSON.parse(fs.readFileSync(file, "utf8"));
-      return v.chatId || null;
-    }
-  } catch (e) {
-    console.error("read chat.json:", e.message);
-  }
-  return null;
+if (!TELEGRAM_TOKEN || !CHAT_ID) {
+  console.error("Missing TELEGRAM_TOKEN or CHAT_ID in environment variables.");
+  process.exit(1);
 }
 
-async function test() {
-  const chatFromEnv = process.env.CHAT_ID || null;
-  const savedChat = await getSavedChatId();
-  const chatId = savedChat || chatFromEnv;
-  if (!chatId) {
-    console.error("No chat id available. Send /start to the bot or set CHAT_ID env var.");
-    return;
-  }
-  if (!config.BOT_TOKEN) {
-    console.error("Missing TELEGRAM_TOKEN env var.");
-    return;
-  }
+const bot = new Telegraf(TELEGRAM_TOKEN);
 
+(async () => {
   try {
-    const res = await axios.post(
-      `https://api.telegram.org/bot${config.BOT_TOKEN}/sendMessage`,
-      {
-        chat_id: chatId,
-        text: "✅ testTelegram: bot is able to send messages to this chat."
-      }
+    await bot.telegram.sendMessage(
+      CHAT_ID,
+      "✅ Test message from crypto-scanner bot. If you see this, Telegram integration works!"
     );
-    console.log("Message sent:", res.data.ok ? "OK" : res.data);
+    console.log("Test message sent successfully.");
+    process.exit(0);
   } catch (err) {
-    console.error("Telegram error:", err.response?.data || err.message);
+    console.error("❌ Failed to send test message:", err.response?.description || err.message);
+    process.exit(1);
   }
-}
-
-test();
+})();
