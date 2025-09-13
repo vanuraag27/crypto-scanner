@@ -1,4 +1,3 @@
-// logger.js
 const fs = require("fs");
 const path = require("path");
 
@@ -13,7 +12,7 @@ function getLogFile() {
 function log(message) {
   const timestamp = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
   const line = `[${timestamp}] ${message}`;
-  console.log(line); // still log important events to Render
+  console.log(line); // important events in Render logs
   fs.appendFileSync(getLogFile(), line + "\n", "utf-8");
 }
 
