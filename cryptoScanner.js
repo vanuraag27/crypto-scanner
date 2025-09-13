@@ -121,7 +121,10 @@ bot.command("setbaseline", async ctx => {
   if (ctx.from.id.toString() !== ADMIN_ID) return ctx.reply("⛔ Admin only.");
   await setBaseline(true);
 });
-
+bot.command("clearhistory", async ctx => {
+  if (ctx.from.id.toString() !== ADMIN_ID) return ctx.reply("⛔ Admin only.");
+  await setBaseline(true); 
+});
 bot.command("status", async ctx => {
   const baselineDay = persistence.baselineDate || "N/A";
   const msg = `✅ Scanner running.\nBaseline day: ${baselineDay}\nActive alerts today: ${
