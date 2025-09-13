@@ -1,19 +1,14 @@
 {
   "name": "crypto-scanner",
   "version": "1.1.0",
-  "description": "Crypto scanner with Telegram alerts and baseline tracking",
   "main": "cryptoScanner.js",
   "scripts": {
-    "start": "node cryptoScanner.js",
-    "test": "node testTelegram.js"
+    "start": "node cryptoScanner.js"
   },
   "dependencies": {
-    "axios": "^1.6.8",
-    "body-parser": "^1.20.2",
-    "dotenv": "^16.4.5",
+    "axios": "^1.6.7",
+    "dotenv": "^16.3.1",
     "express": "^4.19.2",
-    "moment-timezone": "^0.5.45",
-    "node-cron": "^3.0.3",
-    "telegraf": "^4.16.3"
+    "telegraf": "^4.15.3"
   }
 }
