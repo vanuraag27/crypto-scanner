@@ -24,7 +24,7 @@ app.use(bodyParser.json());
 const baselineFile = "./baseline.json";
 let persistence = {
   baselineDate: null,
-  alertsBaseline: null,
+  alertsBaseline: {},
   savedChat: null,
   coins: []
 };
@@ -43,13 +43,13 @@ function savePersistence() {
 // Telegram bot
 const bot = new Telegraf(TELEGRAM_TOKEN);
 
-// Express webhook endpoint
+// Webhook endpoint
 app.post("/webhook", (req, res) => {
   bot.handleUpdate(req.body);
   res.sendStatus(200);
 });
 
-// --- Helper: format IST time ---
+// --- Helper: IST time ---
 function nowIST() {
   return moment().tz("Asia/Kolkata");
 }
@@ -73,7 +73,7 @@ async function setBaseline(manual = false) {
 
     persistence.baselineDate = nowIST().format("YYYY-MM-DD");
     persistence.coins = top10;
-    persistence.alertsBaseline = {};
+    persistence.alertsBaseline = {}; // reset alerts
     savePersistence();
 
     const time = nowIST().format("D/M/YYYY, h:mm:ss a");
@@ -94,9 +94,10 @@ async function setBaseline(manual = false) {
 // --- Scheduler for Baseline ---
 cron.schedule(
   `${BASELINE_MINUTE} ${BASELINE_HOUR} * * *`,
-  () => {
-    console.log(`⏰ Running scheduled baseline at ${BASELINE_HOUR}:${BASELINE_MINUTE} IST`);
-    setBaseline(false);
+  async () => {
+    const triggerTime = nowIST().format("D/M/YYYY, h:mm:ss a");
+    await bot.telegram.sendMessage(CHAT_ID, `⏰ Scheduled baseline job triggered at ${triggerTime}`);
+    await setBaseline(false);
   },
   { timezone: "Asia/Kolkata" }
 );
@@ -121,10 +122,7 @@ bot.command("setbaseline", async ctx => {
   if (ctx.from.id.toString() !== ADMIN_ID) return ctx.reply("⛔ Admin only.");
   await setBaseline(true);
 });
-bot.command("clearhistory", async ctx => {
-  if (ctx.from.id.toString() !== ADMIN_ID) return ctx.reply("⛔ Admin only.");
-  await setBaseline(true); 
-});
+
 bot.command("status", async ctx => {
   const baselineDay = persistence.baselineDate || "N/A";
   const msg = `✅ Scanner running.\nBaseline day: ${baselineDay}\nActive alerts today: ${
@@ -159,12 +157,14 @@ bot.command("profit", async ctx => {
       }
     );
     const latest = response.data.data;
-    const profits = persistence.coins.map(base => {
-      const now = latest.find(c => c.symbol === base.symbol);
-      if (!now) return null;
-      const diff = ((now.quote.USD.price - base.price) / base.price) * 100;
-      return { symbol: base.symbol, baseline: base.price, current: now.quote.USD.price, profit: diff };
-    }).filter(Boolean);
+    const profits = persistence.coins
+      .map(base => {
+        const now = latest.find(c => c.symbol === base.symbol);
+        if (!now) return null;
+        const diff = ((now.quote.USD.price - base.price) / base.price) * 100;
+        return { symbol: base.symbol, baseline: base.price, current: now.quote.USD.price, profit: diff };
+      })
+      .filter(Boolean);
 
     const msg = `📈 Profit since baseline (${persistence.baselineDate}):\n${profits
       .sort((a, b) => b.profit - a.profit)
@@ -181,11 +181,32 @@ bot.command("profit", async ctx => {
   }
 });
 
+bot.command("alerts", async ctx => {
+  if (!persistence.baselineDate) {
+    return ctx.reply("⚠️ Baseline not set yet.");
+  }
+  const keys = Object.keys(persistence.alertsBaseline || {});
+  if (keys.length === 0) {
+    return ctx.reply(`🔔 Alerts for baseline ${persistence.baselineDate}:\nNone`);
+  }
+  const msg = `🔔 Alerts for baseline ${persistence.baselineDate}:\n${keys
+    .map(k => `• ${k}: ${persistence.alertsBaseline[k]}`)
+    .join("\n")}`;
+  ctx.reply(msg);
+});
+
+bot.command("clearhistory", async ctx => {
+  if (ctx.from.id.toString() !== ADMIN_ID) return ctx.reply("⛔ Admin only.");
+  persistence.alertsBaseline = {};
+  savePersistence();
+  ctx.reply("🗑️ Alert history cleared for today.");
+});
+
 // --- Start Server & Bot ---
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`🌍 Server running on port ${PORT}`);
-  console.log(`🔍 Scanner initialized.`);
+  console.log("🔍 Scanner initialized.");
   console.log(
     `📅 Baseline will be set automatically each day at ${BASELINE_HOUR}:${BASELINE_MINUTE
       .toString()
