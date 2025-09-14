@@ -1,5 +1,17 @@
 {
-  "date": null,
-  "setAt": null,
-  "coins": []
+  "official": {
+    "date": null,
+    "setAt": null,
+    "coins": []
+  },
+  "manual": {
+    "date": null,
+    "setAt": null,
+    "coins": []
+  },
+  "alerts": {
+    "baselineDate": null,
+    "fired": [],
+    "savedChat": null
+  }
 }
