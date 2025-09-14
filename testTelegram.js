@@ -1,21 +1,16 @@
-const axios = require("axios");
-const config = require("./config");
+// testTelegram.js
+const { Telegraf } = require("telegraf");
 
-async function sendTestMessage() {
-  try {
-    const res = await axios.post(
-      `https://api.telegram.org/bot${config.BOT_TOKEN}/sendMessage`,
-      {
-        chat_id: config.CHAT_ID,
-        text: `✅ Test message at ${new Date().toLocaleString("en-IN", {
-          timeZone: "Asia/Kolkata"
-        })}`
-      }
-    );
-    console.log("📩 Test message sent:", res.data);
-  } catch (err) {
-    console.error("❌ Failed to send test message:", err.response?.data || err.message);
-  }
+const token = process.env.TELEGRAM_TOKEN;
+if (!token) {
+  console.error("TELEGRAM_TOKEN not set in env.");
+  process.exit(1);
 }
-
-sendTestMessage();
+const bot = new Telegraf(token);
+bot.telegram.getMe().then(info => {
+  console.log("Bot info:", info);
+  process.exit(0);
+}).catch(err => {
+  console.error("Telegram API error:", err.response ? err.response.data : err.message);
+  process.exit(1);
+});
