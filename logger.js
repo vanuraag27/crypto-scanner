@@ -1,19 +1,30 @@
+// logger.js
 const fs = require("fs");
 const path = require("path");
 
-const logDir = path.join(__dirname, "logs");
-if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
+const LOG_DIR = path.join(__dirname, "logs");
+if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
 
-function getLogFile() {
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
-  return path.join(logDir, `${today}.log`);
+function todayFile() {
+  const d = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }); // YYYY-MM-DD
+  return path.join(LOG_DIR, `${d}.log`);
 }
 
-function log(message) {
-  const timestamp = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
-  const line = `[${timestamp}] ${message}`;
-  console.log(line); // important events in Render logs
-  fs.appendFileSync(getLogFile(), line + "\n", "utf-8");
+function timestamp() {
+  return new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
 }
 
-module.exports = { log };
+function write(line) {
+  const out = `[${timestamp()}] ${line}`;
+  console.log(out);
+  try {
+    fs.appendFileSync(todayFile(), out + "\n", "utf8");
+  } catch (e) {
+    console.error("logger write error:", e.message);
+  }
+}
+
+module.exports = {
+  write,
+  todayFilePath: todayFile
+};
