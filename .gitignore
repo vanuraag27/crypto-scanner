@@ -1,14 +1,5 @@
-# Node modules
 node_modules/
-
-# Logs
-logs/*
-!logs/.gitkeep
-
-# Data files
 data.json
 alerts.json
-
-# System files
-.DS_Store
+logs/
 .env
