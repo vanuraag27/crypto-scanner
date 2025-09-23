@@ -1,11 +1,14 @@
-# Node.js dependencies
+# Node modules
 node_modules/
-npm-debug.log
-yarn-error.log
-
-# Environment files
-.env
 
 # Logs
-*.log
-logs/
+logs/*
+!logs/.gitkeep
+
+# Data files
+data.json
+alerts.json
+
+# System files
+.DS_Store
+.env
