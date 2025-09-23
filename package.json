@@ -1,20 +1,15 @@
 {
   "name": "crypto-scanner",
-  "version": "1.4.0",
-  "description": "Crypto scanner bot with baseline, alerts, and Telegram integration",
+  "version": "1.3.0",
   "main": "cryptoScanner.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node cryptoScanner.js"
   },
   "dependencies": {
-    "axios": "^1.7.3",
-    "express": "^4.19.2",
+    "axios": "^1.6.7",
+    "express": "^4.18.2",
     "node-schedule": "^2.1.1",
-    "telegraf": "^4.16.3"
-  },
-  "engines": {
-    "node": ">=18.x"
-  },
-  "author": "Anurag",
-  "license": "MIT"
+    "telegraf": "^4.15.3"
+  }
 }
