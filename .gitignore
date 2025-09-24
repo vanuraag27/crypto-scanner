@@ -1,16 +1,16 @@
-# Ignore node modules
+# Node.js
 node_modules/
-
-# Environment variables
-.env
+npm-debug.log
+yarn-error.log
 
 # Logs
 logs/
 *.log
 
-# Data persistence
+# Data files
 data.json
 alerts.json
 
-# Render cache
-.cache/
+# OS
+.DS_Store
+Thumbs.db
