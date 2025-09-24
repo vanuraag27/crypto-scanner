@@ -1,5 +1,16 @@
+# Ignore node modules
 node_modules/
+
+# Environment variables
+.env
+
+# Logs
 logs/
+*.log
+
+# Data persistence
 data.json
 alerts.json
-.env
+
+# Render cache
+.cache/
