@@ -1,16 +1,19 @@
 {
   "name": "crypto-scanner",
   "version": "1.4.0",
-  "description": "Telegram crypto scanner with baseline, profit, alerts, and auto-profit toggle",
+  "description": "Telegram crypto scanner bot with baseline, alerts, and auto profit updates",
   "main": "cryptoScanner.js",
+  "type": "module",
   "scripts": {
     "start": "node cryptoScanner.js"
   },
   "dependencies": {
-    "axios": "^1.7.2",
+    "axios": "^1.7.0",
     "express": "^4.19.2",
-    "moment-timezone": "^0.5.45",
     "node-schedule": "^2.1.1",
     "telegraf": "^4.16.3"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
