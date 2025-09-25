@@ -1,308 +1,286 @@
-// cryptoScanner.js
-// Telegram Crypto Scanner Bot with Webhook + Baseline + Alerts + Logging
-// Filters loosened (Option B): Gain ≥ 5%, Volume ≥ $10M, Market Cap ≥ $100M
+/**
+ * cryptoScanner.js
+ * Telegram crypto scanner with baseline, profit tracking, alerts, and auto-profit toggle.
+ */
 
-const fs = require("fs");
-const path = require("path");
 const express = require("express");
-const axios = require("axios");
-const schedule = require("node-schedule");
 const { Telegraf } = require("telegraf");
+const fs = require("fs");
+const schedule = require("node-schedule");
+const axios = require("axios");
+const moment = require("moment-timezone");
 
-// === ENVIRONMENT CONFIG ===
+// ============ ENV CONFIG ============
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const CHAT_ID = process.env.CHAT_ID;
 const ADMIN_ID = process.env.ADMIN_ID;
 const BASE_URL = process.env.BASE_URL;
-const REFRESH_INTERVAL = parseInt(process.env.REFRESH_INTERVAL || "600000", 10);
-const ALERT_DROP_PERCENT = parseFloat(process.env.ALERT_DROP_PERCENT || "-10");
-const BASELINE_HOUR = parseInt(process.env.BASELINE_HOUR || "6", 10);
-const BASELINE_MINUTE = parseInt(process.env.BASELINE_MINUTE || "0", 10);
-const FETCH_LIMIT = parseInt(process.env.FETCH_LIMIT || "50", 10);
 const CMC_API_KEY = process.env.CMC_API_KEY;
+const REFRESH_INTERVAL = parseInt(process.env.REFRESH_INTERVAL || "600000");
+const BASELINE_HOUR = parseInt(process.env.BASELINE_HOUR || "6");
+const BASELINE_MINUTE = parseInt(process.env.BASELINE_MINUTE || "0");
+const ALERT_DROP_PERCENT = parseFloat(process.env.ALERT_DROP_PERCENT || "-10");
+const FETCH_LIMIT = parseInt(process.env.FETCH_LIMIT || "50");
 
-// === FILE PATHS ===
-const persistenceFile = path.join(__dirname, "data.json");
-const alertsFile = path.join(__dirname, "alerts.json");
-const logsDir = path.join(__dirname, "logs");
+const DATA_FILE = "data.json";
+const ALERTS_FILE = "alerts.json";
+const LOG_DIR = "logs";
 
-// === STATE ===
-let state = { date: null, setAt: null, coins: [] };
-let alerts = { date: null, symbols: [] };
+// ============ STATE ============
+let baseline = { date: null, setAt: null, coins: [] };
+let alertsTriggered = [];
+let profitInterval = null; // for auto-profit toggle
 
-// === HELPERS ===
+// ============ UTILS ============
 function log(msg) {
-  const now = new Date();
-  const line = `[${now.toLocaleString()}] ${msg}`;
+  const now = moment().tz("Asia/Kolkata").format("DD/MM/YYYY, h:mm:ss a");
+  const line = `[${now}] ${msg}`;
   console.log(line);
 
-  if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir);
-  const file = path.join(logsDir, `${now.toISOString().split("T")[0]}.log`);
-  fs.appendFileSync(file, line + "\n");
+  if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR);
+  const logFile = `${LOG_DIR}/${moment().tz("Asia/Kolkata").format("YYYY-MM-DD")}.log`;
+  fs.appendFileSync(logFile, line + "\n");
+
+  // Cleanup old logs (7 days retention)
+  const files = fs.readdirSync(LOG_DIR);
+  const cutoff = moment().subtract(7, "days");
+  files.forEach((file) => {
+    const dateStr = file.replace(".log", "");
+    if (moment(dateStr, "YYYY-MM-DD").isBefore(cutoff)) {
+      fs.unlinkSync(`${LOG_DIR}/${file}`);
+    }
+  });
 }
 
-function loadPersistence() {
-  if (fs.existsSync(persistenceFile)) {
+function loadData() {
+  if (fs.existsSync(DATA_FILE)) {
     try {
-      state = JSON.parse(fs.readFileSync(persistenceFile, "utf8"));
+      baseline = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
     } catch {
-      state = { date: null, setAt: null, coins: [] };
+      baseline = { date: null, setAt: null, coins: [] };
     }
   }
-  if (fs.existsSync(alertsFile)) {
+  if (fs.existsSync(ALERTS_FILE)) {
     try {
-      alerts = JSON.parse(fs.readFileSync(alertsFile, "utf8"));
+      alertsTriggered = JSON.parse(fs.readFileSync(ALERTS_FILE, "utf8"));
     } catch {
-      alerts = { date: null, symbols: [] };
+      alertsTriggered = [];
     }
   }
-  log("Loaded persistence: " + JSON.stringify(state, null, 2));
+  log("Loaded persistence: " + JSON.stringify(baseline, null, 2));
 }
 
-function savePersistence() {
-  fs.writeFileSync(persistenceFile, JSON.stringify(state, null, 2));
+function saveData() {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(baseline, null, 2));
 }
 
 function saveAlerts() {
-  fs.writeFileSync(alertsFile, JSON.stringify(alerts, null, 2));
+  fs.writeFileSync(ALERTS_FILE, JSON.stringify(alertsTriggered, null, 2));
 }
 
-async function fetchTopCoins(limit = FETCH_LIMIT) {
-  const url = `https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest?limit=${limit}&convert=USD`;
-  const res = await axios.get(url, {
-    headers: { "X-CMC_PRO_API_KEY": CMC_API_KEY },
-  });
-  return res.data.data;
+function formatCoins(coins) {
+  return coins
+    .map(
+      (c, i) =>
+        `${i + 1}. ${c.symbol} — $${c.price.toFixed(4)} (24h: ${c.change.toFixed(
+          2
+        )}%)`
+    )
+    .join("\n");
 }
 
-function filterCoins(data) {
-  // Option B filters
-  return data.filter(
-    (c) =>
-      c.quote.USD.percent_change_24h >= 5 &&
-      c.quote.USD.volume_24h >= 10_000_000 &&
-      c.quote.USD.market_cap >= 100_000_000
-  );
-}
-
-function formatCoin(c) {
-  return `${c.symbol} — $${c.quote.USD.price.toFixed(4)} (24h: ${c.quote.USD.percent_change_24h.toFixed(2)}%)`;
-}
-
-// === TELEGRAM BOT ===
-const bot = new Telegraf(TELEGRAM_TOKEN);
-
-// /start
-bot.start((ctx) => {
-  ctx.reply(
-    "👋 Welcome to Crypto Scanner Bot!\n\n📌 Commands:\n" +
-      "/start - register this chat\n" +
-      "/status - scanner & baseline status\n" +
-      "/top10 - show filtered top 10 (baseline)\n" +
-      "/profit - profit since baseline\n" +
-      "/alerts - list triggered alerts\n" +
-      "/setbaseline - admin only, set baseline now\n" +
-      "/clearhistory - admin only, reset alerts\n" +
-      "/logs - admin only, fetch last 7 days logs"
-  );
-});
-
-// /status
-bot.command("status", (ctx) => {
-  ctx.reply(
-    `📊 Baseline date: ${state.date || "N/A"}\nSet at: ${state.setAt || "N/A"}\nCoins tracked: ${state.coins.length}`
-  );
-});
-
-// /top10
-bot.command("top10", async (ctx) => {
-  if (!state.date || !state.coins.length) {
-    return ctx.reply("⚠️ Baseline not set yet.");
-  }
-  const coins = state.coins.slice(0, 10);
-  if (!coins.length) return ctx.reply("⚠️ No coins match filters now.");
-  const msg =
-    `📊 Baseline Top 10 (day: ${state.date}, set at ${new Date(state.setAt).toLocaleString()})\n` +
-    coins.map((c, i) => `${i + 1}. ${formatCoin(c)}`).join("\n");
-  ctx.reply(msg);
-});
-
-// /profit
-bot.command("profit", async (ctx) => {
-  if (!state.date || !state.coins.length) {
-    return ctx.reply("⚠️ Baseline not set yet.");
-  }
+async function fetchTopCoins() {
   try {
-    const data = await fetchTopCoins(FETCH_LIMIT);
-    const tracked = state.coins.map((base) => {
-      const cur = data.find((c) => c.symbol === base.symbol);
-      if (!cur) return null;
-      const pct = ((cur.quote.USD.price - base.quote.USD.price) / base.quote.USD.price) * 100;
-      return {
-        symbol: base.symbol,
-        from: base.quote.USD.price,
-        to: cur.quote.USD.price,
-        pct,
-      };
-    }).filter(Boolean);
-
-    tracked.sort((a, b) => b.pct - a.pct);
-
-    const msg =
-      `📈 Profit since baseline (${state.date})\n` +
-      tracked
-        .slice(0, 10)
-        .map(
-          (c, i) =>
-            `${i + 1}. ${c.symbol} → ${c.pct.toFixed(2)}% (from $${c.from.toFixed(4)} to $${c.to.toFixed(4)})`
-        )
-        .join("\n");
-    ctx.reply(msg);
-  } catch (err) {
-    ctx.reply("❌ Error fetching profit data.");
-    log("Profit error: " + err.message);
-  }
-});
-
-// /alerts
-bot.command("alerts", (ctx) => {
-  if (!alerts.date || !alerts.symbols.length) {
-    return ctx.reply(`🔔 Alerts for baseline ${state.date || "N/A"}: None`);
-  }
-  ctx.reply(
-    `🔔 Alerts for baseline ${alerts.date}:\n` +
-      alerts.symbols.map((a) => `${a.symbol} dropped ${a.drop.toFixed(2)}%`).join("\n")
-  );
-});
-
-// /setbaseline (admin only)
-bot.command("setbaseline", async (ctx) => {
-  if (ctx.from.id.toString() !== ADMIN_ID) {
-    return ctx.reply("⛔ Admin only.");
-  }
-  try {
-    const data = await fetchTopCoins(FETCH_LIMIT);
-    const filtered = filterCoins(data);
-    state = {
-      date: new Date().toISOString().split("T")[0],
-      setAt: new Date().toISOString(),
-      coins: filtered,
-    };
-    savePersistence();
-    alerts = { date: state.date, symbols: [] };
-    saveAlerts();
-
-    ctx.reply(
-      `✅ Baseline set (manual) at ${new Date(state.setAt).toLocaleString()}\nDate: ${state.date}\n` +
-        (filtered.length
-          ? filtered
-              .slice(0, 10)
-              .map((c, i) => `${i + 1}. ${formatCoin(c)}`)
-              .join("\n")
-          : "⚠️ No coins matched filters at baseline.")
-    );
-  } catch (err) {
-    ctx.reply("❌ Error setting baseline.");
-    log("Baseline error: " + err.message);
-  }
-});
-
-// /clearhistory (admin only)
-bot.command("clearhistory", (ctx) => {
-  if (ctx.from.id.toString() !== ADMIN_ID) {
-    return ctx.reply("⛔ Admin only.");
-  }
-  alerts = { date: state.date, symbols: [] };
-  saveAlerts();
-  ctx.reply("✅ Alerts cleared for current baseline day.");
-});
-
-// /logs (admin only)
-bot.command("logs", (ctx) => {
-  if (ctx.from.id.toString() !== ADMIN_ID) return ctx.reply("⛔ Admin only.");
-  const files = fs
-    .readdirSync(logsDir)
-    .filter((f) => f.endsWith(".log"))
-    .sort()
-    .slice(-7); // last 7 days
-  if (!files.length) return ctx.reply("⚠️ No logs found.");
-  ctx.reply("📂 Logs:\n" + files.join("\n"));
-});
-
-// === SCHEDULER ===
-schedule.scheduleJob({ hour: BASELINE_HOUR, minute: BASELINE_MINUTE, tz: "Asia/Kolkata" }, async () => {
-  log("⏰ Scheduled baseline run triggered.");
-  try {
-    const data = await fetchTopCoins(FETCH_LIMIT);
-    const filtered = filterCoins(data);
-    state = {
-      date: new Date().toISOString().split("T")[0],
-      setAt: new Date().toISOString(),
-      coins: filtered,
-    };
-    savePersistence();
-    alerts = { date: state.date, symbols: [] };
-    saveAlerts();
-
-    const msg =
-      `✅ Baseline set (auto) at ${new Date(state.setAt).toLocaleString()}\nDate: ${state.date}\n` +
-      (filtered.length
-        ? filtered
-            .slice(0, 10)
-            .map((c, i) => `${i + 1}. ${formatCoin(c)}`)
-            .join("\n")
-        : "⚠️ No coins matched filters at baseline.");
-    await bot.telegram.sendMessage(CHAT_ID, msg);
-  } catch (err) {
-    log("Auto baseline error: " + err.message);
-  }
-});
-
-// Alert checker (runs every REFRESH_INTERVAL)
-setInterval(async () => {
-  if (!state.date || !state.coins.length) return;
-  try {
-    const data = await fetchTopCoins(FETCH_LIMIT);
-    for (let base of state.coins) {
-      const cur = data.find((c) => c.symbol === base.symbol);
-      if (!cur) continue;
-      const pct = ((cur.quote.USD.price - base.quote.USD.price) / base.quote.USD.price) * 100;
-      if (pct <= ALERT_DROP_PERCENT) {
-        if (!alerts.symbols.some((a) => a.symbol === base.symbol)) {
-          alerts.symbols.push({ symbol: base.symbol, drop: pct });
-          saveAlerts();
-          await bot.telegram.sendMessage(
-            CHAT_ID,
-            `🚨 ALERT: ${base.symbol} dropped ${pct.toFixed(2)}%\nBaseline: $${base.quote.USD.price.toFixed(
-              4
-            )}\nNow: $${cur.quote.USD.price.toFixed(4)}\nTime: ${new Date().toLocaleString("en-IN", {
-              timeZone: "Asia/Kolkata",
-            })}`
-          );
-        }
+    const res = await axios.get(
+      `https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest`,
+      {
+        headers: { "X-CMC_PRO_API_KEY": CMC_API_KEY },
+        params: { start: 1, limit: FETCH_LIMIT, convert: "USD" },
       }
-    }
-  } catch (err) {
-    log("Alert check error: " + err.message);
-  }
-}, REFRESH_INTERVAL);
+    );
 
-// === EXPRESS SERVER (Webhook) ===
+    return res.data.data.map((c) => ({
+      symbol: c.symbol,
+      price: c.quote.USD.price,
+      change: c.quote.USD.percent_change_24h,
+      volume: c.quote.USD.volume_24h,
+      marketCap: c.quote.USD.market_cap,
+    }));
+  } catch (err) {
+    log("Error fetching coins: " + err.message);
+    return [];
+  }
+}
+
+// ============ TELEGRAM BOT ============
+const bot = new Telegraf(TELEGRAM_TOKEN);
 const app = express();
 app.use(bot.webhookCallback("/webhook"));
 
 (async () => {
   await bot.telegram.setWebhook(`${BASE_URL}/webhook`);
   log(`✅ Webhook set to ${BASE_URL}/webhook`);
-
-  loadPersistence();
-  app.listen(10000, () => {
-    log("🌍 Server listening on port 10000");
-    log(
-      `Configuration: baseline ${BASELINE_HOUR}:${BASELINE_MINUTE} IST | refresh ${REFRESH_INTERVAL} ms | alert drop ${ALERT_DROP_PERCENT}%`
-    );
-    if (!state.date) {
-      log(`⚠️ Official baseline not set for today. Will auto-set at ${BASELINE_HOUR}:${BASELINE_MINUTE} IST or admin can run /setbaseline.`);
-    }
-  });
 })();
+
+app.listen(10000, () => {
+  log("🌍 Server listening on port 10000");
+});
+
+// ============ COMMANDS ============
+bot.start((ctx) => {
+  if (ctx.chat.id.toString() !== CHAT_ID) return;
+  log(`Saved chatId from /start: ${ctx.chat.id}`);
+  ctx.reply(
+    "👋 Welcome! You will receive crypto scanner updates here.\n\n📌 Commands:\n" +
+      "/start - register chat\n" +
+      "/status - scanner & baseline status\n" +
+      "/top10 - show baseline coins\n" +
+      "/profit - show profit since baseline\n" +
+      "/alerts - list alerts\n" +
+      "/setbaseline [YYYY-MM-DD] - admin set baseline\n" +
+      "/clearhistory - admin clear alerts\n" +
+      "/autoprofit on|off - toggle auto-profit updates"
+  );
+});
+
+bot.command("status", (ctx) => {
+  ctx.reply(
+    `📊 Baseline date: ${baseline.date || "N/A"}\nSet at: ${
+      baseline.setAt || "N/A"
+    }\nCoins tracked: ${baseline.coins.length}`
+  );
+});
+
+bot.command("top10", (ctx) => {
+  if (!baseline.date || !baseline.coins.length)
+    return ctx.reply("⚠️ No baseline set yet.");
+  ctx.reply(
+    `📊 Baseline Top 10 (day: ${baseline.date})\n${formatCoins(
+      baseline.coins
+    )}`
+  );
+});
+
+bot.command("profit", async (ctx) => {
+  if (!baseline.date || !baseline.coins.length)
+    return ctx.reply("⚠️ No baseline set yet.");
+  const latest = await fetchTopCoins();
+  const report = baseline.coins
+    .map((b) => {
+      const c = latest.find((x) => x.symbol === b.symbol);
+      if (!c) return null;
+      const change = ((c.price - b.price) / b.price) * 100;
+      return {
+        symbol: b.symbol,
+        change,
+        from: b.price,
+        to: c.price,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.change - a.change);
+
+  let msg = `📈 Profit since baseline (${baseline.date})\n`;
+  report.forEach((r, i) => {
+    msg += `${i + 1}. ${r.symbol} → ${r.change.toFixed(
+      2
+    )}% (from $${r.from.toFixed(2)} to $${r.to.toFixed(2)})\n`;
+  });
+  ctx.reply(msg);
+});
+
+bot.command("alerts", (ctx) => {
+  ctx.reply(
+    `🔔 Alerts for baseline ${baseline.date || "N/A"}:\n${
+      alertsTriggered.length ? alertsTriggered.join(", ") : "None"
+    }`
+  );
+});
+
+bot.command("setbaseline", async (ctx) => {
+  if (ctx.from.id.toString() !== ADMIN_ID)
+    return ctx.reply("❌ Admin only command.");
+  const args = ctx.message.text.split(" ");
+  let dateStr = null;
+  if (args[1]) dateStr = args[1].replace(/[\[\]]/g, "");
+  const coins = await fetchTopCoins();
+  baseline = {
+    date: dateStr || moment().tz("Asia/Kolkata").format("YYYY-MM-DD"),
+    setAt: new Date().toISOString(),
+    coins: coins.slice(0, 10),
+  };
+  saveData();
+  alertsTriggered = [];
+  saveAlerts();
+  ctx.reply(
+    `✅ Baseline set (manual) at ${moment()
+      .tz("Asia/Kolkata")
+      .format("D/M/YYYY, h:mm:ss a")}\nDate: ${baseline.date}\n${formatCoins(
+      baseline.coins
+    )}`
+  );
+});
+
+bot.command("clearhistory", (ctx) => {
+  if (ctx.from.id.toString() !== ADMIN_ID)
+    return ctx.reply("❌ Admin only command.");
+  alertsTriggered = [];
+  saveAlerts();
+  ctx.reply("🧹 Alerts cleared for current baseline.");
+});
+
+bot.command("autoprofit", (ctx) => {
+  if (ctx.from.id.toString() !== ADMIN_ID)
+    return ctx.reply("❌ Admin only command.");
+  const args = ctx.message.text.split(" ");
+  const option = args[1] ? args[1].toLowerCase() : null;
+  if (option === "on") {
+    if (profitInterval) clearInterval(profitInterval);
+    profitInterval = setInterval(() => {
+      ctx.reply("⏱ Auto-profit update:");
+      bot.telegram.sendMessage(CHAT_ID, "/profit");
+    }, 5 * 60 * 1000);
+    return ctx.reply("✅ Auto-profit updates enabled (every 5 minutes).");
+  }
+  if (option === "off") {
+    if (profitInterval) clearInterval(profitInterval);
+    profitInterval = null;
+    return ctx.reply("🛑 Auto-profit updates disabled.");
+  }
+  ctx.reply("Usage: /autoprofit on | off");
+});
+
+// ============ SCHEDULERS ============
+schedule.scheduleJob(
+  { hour: BASELINE_HOUR, minute: BASELINE_MINUTE, tz: "Asia/Kolkata" },
+  async () => {
+    const coins = await fetchTopCoins();
+    baseline = {
+      date: moment().tz("Asia/Kolkata").format("YYYY-MM-DD"),
+      setAt: new Date().toISOString(),
+      coins: coins.slice(0, 10),
+    };
+    saveData();
+    alertsTriggered = [];
+    saveAlerts();
+    bot.telegram.sendMessage(
+      CHAT_ID,
+      `✅ Baseline set (auto) at ${moment()
+        .tz("Asia/Kolkata")
+        .format("D/M/YYYY, h:mm:ss a")}\nDate: ${baseline.date}\n${formatCoins(
+        baseline.coins
+      )}`
+    );
+  }
+);
+
+// ============ INIT ============
+loadData();
+log(
+  `Configuration: BASELINE ${BASELINE_HOUR}:${BASELINE_MINUTE} IST | REFRESH_INTERVAL ${REFRESH_INTERVAL}ms | ALERT_DROP_PERCENT ${ALERT_DROP_PERCENT}%`
+);
+if (!baseline.date) {
+  log(
+    `⚠️ Official baseline not set for today. Will auto-set at ${BASELINE_HOUR}:${BASELINE_MINUTE} IST or admin can run /setbaseline.`
+  );
+}
