@@ -1,8 +1,5 @@
-# Node
-node_modules
-npm-debug.log
-
-# Data
+node_modules/
+logs/
 data.json
 alerts.json
-logs/
+.env
