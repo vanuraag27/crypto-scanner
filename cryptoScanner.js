@@ -1,6 +1,6 @@
 // cryptoScanner.js
 // Telegram Crypto Scanner Bot with Webhook + Baseline + Alerts + Logging
-// Filters loosened (Option B): Gain ≥ 2%, Volume ≥ $10M, Market Cap ≥ $100M
+// Filters loosened (Option B): Gain ≥ 1%, Volume ≥ $1M, Market Cap ≥ $10M
 
 const fs = require("fs");
 const path = require("path");
@@ -79,9 +79,9 @@ function filterCoins(data) {
   // Option B filters
   return data.filter(
     (c) =>
-      c.quote.USD.percent_change_24h >= 2 &&
-      c.quote.USD.volume_24h >= 10_000_000 &&
-      c.quote.USD.market_cap >= 100_000_000
+      c.quote.USD.percent_change_24h >= 1 &&
+      c.quote.USD.volume_24h >= 10_000_00 &&
+      c.quote.USD.market_cap >= 100_000_00
   );
 }
 
