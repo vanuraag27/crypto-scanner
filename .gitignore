@@ -1,16 +1,4 @@
-# Node.js
 node_modules/
-npm-debug.log
-yarn-error.log
-
-# Logs
-logs/
-*.log
-
-# Data files
 data.json
 alerts.json
-
-# OS
-.DS_Store
-Thumbs.db
+logs/
