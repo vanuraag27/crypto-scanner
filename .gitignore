@@ -1,4 +1,16 @@
+# Node
 node_modules/
+npm-debug.log
+yarn-error.log
+
+# Data persistence
 data.json
 alerts.json
 logs/
+
+# Env files
+.env
+*.env
+
+# Test scripts
+test*.js
