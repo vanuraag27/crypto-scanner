@@ -1,16 +1,8 @@
-# Ignore environment-specific config
-.env
-*.env
+# Node
+node_modules
+npm-debug.log
 
-# Ignore logs
-logs/
-*.log
-
-# Ignore data and alerts persistence
+# Data
 data.json
 alerts.json
-
-# Node.js build artifacts
-node_modules/
-npm-debug.log
-.DS_Store
+logs/
