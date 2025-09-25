@@ -1,0 +1,3 @@
+This file ensures the logs directory exists.
+Old log files will rotate daily and be auto-deleted after 7 days.
+
