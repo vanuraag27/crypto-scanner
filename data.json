@@ -1,5 +1,10 @@
 {
-  "baselineDate": null,
-  "setAt": null,
-  "coins": []
+  "baseline": {
+    "date": null,
+    "setAt": null,
+    "coins": []
+  },
+  "alertsBaseline": null,
+  "savedChat": null,
+  "autoProfitEnabled": false
 }
