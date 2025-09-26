@@ -1,11 +1,5 @@
-# Node
 node_modules/
-npm-debug.log
-
-# Data
 data.json
 alerts.json
-chat.json
-
-# Logs
 logs/
+.env
