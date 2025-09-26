@@ -1,15 +1,15 @@
 {
   "name": "crypto-scanner",
-  "version": "1.4.0",
-  "type": "module",
+  "version": "1.5.0",
   "main": "cryptoScanner.js",
+  "type": "module",
   "scripts": {
     "start": "node cryptoScanner.js"
   },
   "dependencies": {
-    "axios": "^1.7.7",
+    "axios": "^1.7.4",
     "express": "^4.19.2",
     "node-schedule": "^2.1.1",
-    "telegraf": "^4.15.3"
+    "telegraf": "^4.16.3"
   }
 }
