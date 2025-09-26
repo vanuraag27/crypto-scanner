@@ -1,85 +1,77 @@
+// cryptoScanner.js
 import express from "express";
-import fs from "fs-extra";
+import { Telegraf } from "telegraf";
 import axios from "axios";
+import fs from "fs";
 import moment from "moment-timezone";
 import schedule from "node-schedule";
-import { Telegraf } from "telegraf";
 
-// --- ENV ---
+// ===== CONFIG FROM ENV =====
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const CHAT_ID = process.env.CHAT_ID;
 const ADMIN_ID = process.env.ADMIN_ID;
+const CHAT_ID = process.env.CHAT_ID;
 const BASE_URL = process.env.BASE_URL;
 const CMC_API_KEY = process.env.CMC_API_KEY;
 
+const REFRESH_INTERVAL = parseInt(process.env.REFRESH_INTERVAL || "600000"); // 10 min
 const BASELINE_HOUR = parseInt(process.env.BASELINE_HOUR || "6");
 const BASELINE_MINUTE = parseInt(process.env.BASELINE_MINUTE || "0");
-const REFRESH_INTERVAL = parseInt(process.env.REFRESH_INTERVAL || "600000");
-const ALERT_DROP_PERCENT = parseFloat(process.env.ALERT_DROP_PERCENT || "-10");
 
-// Filters
-const MIN_GAIN = parseFloat(process.env.MIN_GAIN || "20");
-const MIN_VOLUME = parseFloat(process.env.MIN_VOLUME || "50000000");
-const MIN_MARKETCAP = parseFloat(process.env.MIN_MARKETCAP || "500000000");
+const MIN_GAIN = 20;
+const MIN_VOLUME = 50_000_000;
+const MIN_MARKETCAP = 500_000_000;
 
-// Persistence
-const DATA_FILE = "data.json";
-const ALERTS_FILE = "alerts.json";
-const LOG_DIR = "logs";
+// ===== STATE =====
+let baseline = null;
+let autoProfitOn = false;
+let autoProfitJob = null;
 
-let baseline = fs.readJsonSync(DATA_FILE, { throws: false }) || {
-  date: null,
-  setAt: null,
-  coins: [],
-};
-let alerts = fs.readJsonSync(ALERTS_FILE, { throws: false }) || {
-  baselineDate: null,
-  alerts: [],
-};
+// ===== LOGGING =====
+const logDir = "./logs";
+if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
 
-let autoProfitInterval = null;
-
-// --- Logging ---
-function log(message) {
-  const ts = moment().tz("Asia/Kolkata").format("D/M/YYYY, h:mm:ss a");
-  console.log(`[${ts}] ${message}`);
-
-  fs.ensureDirSync(LOG_DIR);
-  const filename = `${LOG_DIR}/log-${moment().format("YYYY-MM-DD")}.txt`;
-  fs.appendFileSync(filename, `[${ts}] ${message}\n`);
-
-  // Cleanup logs older than 7 days
-  fs.readdirSync(LOG_DIR).forEach((f) => {
-    const fileDate = f.replace("log-", "").replace(".txt", "");
-    if (moment(fileDate, "YYYY-MM-DD").isBefore(moment().subtract(7, "days"))) {
-      fs.removeSync(`${LOG_DIR}/${f}`);
-    }
-  });
+function logFileName() {
+  return `${logDir}/scanner-${moment().tz("Asia/Kolkata").format("YYYY-MM-DD")}.log`;
 }
 
-// --- Telegram Bot ---
+function log(msg) {
+  const line = `[${moment().tz("Asia/Kolkata").format("DD/MM/YYYY, h:mm:ss a")}] ${msg}`;
+  console.log(line);
+  fs.appendFileSync(logFileName(), line + "\n");
+}
+
+function rotateLogs() {
+  const files = fs.readdirSync(logDir).sort();
+  if (files.length > 7) {
+    for (let i = 0; i < files.length - 7; i++) {
+      fs.unlinkSync(`${logDir}/${files[i]}`);
+    }
+  }
+}
+rotateLogs();
+
+// ===== TELEGRAM BOT =====
 const bot = new Telegraf(TELEGRAM_TOKEN);
 const app = express();
+
 app.use(bot.webhookCallback("/webhook"));
 bot.telegram.setWebhook(`${BASE_URL}/webhook`);
-app.listen(10000, () => log("🌍 Server listening on port 10000"));
 
-// --- Helpers ---
-function filterCoins(coins) {
-  return coins.filter((c) => {
-    const gain = parseFloat(c.quote.USD.percent_change_24h || 0);
-    const volume = parseFloat(c.quote.USD.volume_24h || 0);
-    const marketCap = parseFloat(c.quote.USD.market_cap || 0);
-    return gain >= MIN_GAIN && volume >= MIN_VOLUME && marketCap >= MIN_MARKETCAP;
-  });
-}
+app.listen(10000, () => {
+  log(`🌍 Server listening on port 10000`);
+  log(`✅ Webhook set to ${BASE_URL}/webhook`);
+});
 
+// ===== HELPER FUNCTIONS =====
 async function fetchTopCoins(limit = 100) {
   try {
-    const res = await axios.get("https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest", {
-      headers: { "X-CMC_PRO_API_KEY": CMC_API_KEY },
-      params: { start: 1, limit, convert: "USD" },
-    });
+    const res = await axios.get(
+      "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest",
+      {
+        headers: { "X-CMC_PRO_API_KEY": CMC_API_KEY },
+        params: { start: 1, limit, convert: "USD,INR" },
+      }
+    );
     return res.data.data || [];
   } catch (err) {
     log("❌ Error fetching coins: " + err.message);
@@ -87,171 +79,185 @@ async function fetchTopCoins(limit = 100) {
   }
 }
 
-// --- Baseline ---
-async function setBaseline(manual = false, customDate = null) {
-  const coins = await fetchTopCoins();
-  const filtered = filterCoins(coins).slice(0, 10);
+async function fetchHistorical(symbol) {
+  try {
+    const res = await axios.get(
+      "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/historical",
+      {
+        headers: { "X-CMC_PRO_API_KEY": CMC_API_KEY },
+        params: {
+          symbol,
+          time_start: moment().subtract(20, "days").toISOString(),
+          time_end: moment().toISOString(),
+          interval: "daily",
+          convert: "USD",
+        },
+      }
+    );
+    return res.data.data.quotes || [];
+  } catch (err) {
+    log(`❌ Error fetching historical for ${symbol}: ${err.message}`);
+    return [];
+  }
+}
+
+function calcRSI(closes, period = 14) {
+  if (closes.length < period + 1) return null;
+  let gains = 0,
+    losses = 0;
+  for (let i = closes.length - period; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff > 0) gains += diff;
+    else losses -= diff;
+  }
+  const rs = gains / (losses || 1);
+  return 100 - 100 / (1 + rs);
+}
+
+async function filterCoins(coins) {
+  const filtered = [];
+
+  for (let c of coins) {
+    const gain = parseFloat(c.quote.USD.percent_change_24h || 0);
+    const volume = parseFloat(c.quote.USD.volume_24h || 0);
+    const marketCap = parseFloat(c.quote.USD.market_cap || 0);
+
+    if (gain < MIN_GAIN || volume < MIN_VOLUME || marketCap < MIN_MARKETCAP) continue;
+
+    const hist = await fetchHistorical(c.symbol);
+    if (hist.length < 15) continue;
+
+    const closes = hist.map((h) => h.quote.USD.close);
+    const volumes = hist.map((h) => h.quote.USD.volume);
+
+    const todayRSI = calcRSI(closes);
+    const yesterdayRSI = calcRSI(closes.slice(0, -1));
+
+    const todayVol = volumes[volumes.length - 1];
+    const yestVol = volumes[volumes.length - 2];
+
+    if (todayRSI && yesterdayRSI && todayRSI > yesterdayRSI && todayVol > yestVol) {
+      filtered.push(c);
+    }
+  }
+
+  return filtered;
+}
+
+// ===== BASELINE =====
+async function setBaseline(customDate = null) {
+  const coins = await fetchTopCoins(100);
+  const filtered = await filterCoins(coins);
 
   baseline = {
     date: customDate || moment().tz("Asia/Kolkata").format("YYYY-MM-DD"),
     setAt: moment().tz("Asia/Kolkata").toISOString(),
     coins: filtered.map((c) => ({
       symbol: c.symbol,
-      price: c.quote.USD.price,
+      price: c.quote.INR.price,
       percent: c.quote.USD.percent_change_24h,
     })),
   };
 
-  alerts = { baselineDate: baseline.date, alerts: [] };
-  fs.writeJsonSync(DATA_FILE, baseline, { spaces: 2 });
-  fs.writeJsonSync(ALERTS_FILE, alerts, { spaces: 2 });
+  fs.writeFileSync("./data.json", JSON.stringify(baseline, null, 2));
 
-  let text = `${manual ? "✅ Baseline set (manual)" : "✅ Baseline set (auto)"} at ${moment(baseline.setAt)
-    .tz("Asia/Kolkata")
-    .format("D/M/YYYY, h:mm:ss a")}\nDate: [${baseline.date}]`;
-
-  if (baseline.coins.length === 0) {
-    text += `\n⚠️ No coins match filters now.`;
-  } else {
-    baseline.coins.forEach((c, i) => {
-      text += `\n${i + 1}. ${c.symbol} — $${c.price.toFixed(4)} (24h: ${c.percent.toFixed(2)}%)`;
-    });
-  }
-  await bot.telegram.sendMessage(CHAT_ID, text);
+  return baseline;
 }
 
-// --- Profit Report ---
-async function profitReport() {
-  if (!baseline.date) return "⚠️ Baseline not set.";
-  const coins = await fetchTopCoins();
+async function calculateProfit() {
+  if (!baseline) return "⚠️ No baseline set.";
 
-  let text = `📈 Profit since baseline ([${baseline.date}])`;
+  const latest = await fetchTopCoins(100);
   const results = [];
 
   for (let b of baseline.coins) {
-    const current = coins.find((c) => c.symbol === b.symbol);
-    if (current) {
-      const change = ((current.quote.USD.price - b.price) / b.price) * 100;
-      results.push({
-        symbol: b.symbol,
-        change,
-        from: b.price,
-        to: current.quote.USD.price,
-      });
-    }
+    const current = latest.find((c) => c.symbol === b.symbol);
+    if (!current) continue;
+    const change = ((current.quote.INR.price - b.price) / b.price) * 100;
+    results.push({
+      symbol: b.symbol,
+      from: b.price,
+      to: current.quote.INR.price,
+      change,
+    });
   }
 
   results.sort((a, b) => b.change - a.change);
-  results.forEach((r, i) => {
-    text += `\n${i + 1}. ${r.symbol} → ${r.change.toFixed(2)}% (from $${r.from.toFixed(2)} to $${r.to.toFixed(2)})`;
+
+  let text = `📈 Profit since baseline (${baseline.date})`;
+  results.slice(0, 10).forEach((r, i) => {
+    text += `\n${i + 1}. ${r.symbol} → ${r.change.toFixed(2)}% (from ₹${r.from.toFixed(
+      2
+    )} to ₹${r.to.toFixed(2)})`;
   });
+
   return text;
 }
 
-// --- Alerts ---
-async function checkAlerts() {
-  if (!baseline.date) return;
-  const coins = await fetchTopCoins();
-  for (let b of baseline.coins) {
-    const current = coins.find((c) => c.symbol === b.symbol);
-    if (current) {
-      const change = ((current.quote.USD.price - b.price) / b.price) * 100;
-      if (change <= ALERT_DROP_PERCENT && !alerts.alerts.includes(b.symbol)) {
-        alerts.alerts.push(b.symbol);
-        fs.writeJsonSync(ALERTS_FILE, alerts, { spaces: 2 });
-        await bot.telegram.sendMessage(
-          CHAT_ID,
-          `🚨 Alert: ${b.symbol} dropped ${change.toFixed(2)}% since baseline!\nBaseline: $${b.price.toFixed(
-            2
-          )} → Now: $${current.quote.USD.price.toFixed(2)}`
-        );
-      }
-    }
-  }
-}
+// ===== BOT COMMANDS =====
+bot.start((ctx) => {
+  fs.writeFileSync("./chat.json", JSON.stringify({ chatId: ctx.chat.id }));
+  ctx.reply("👋 Welcome! You will receive crypto scanner updates here.");
+});
 
-// --- Commands ---
-bot.start(async (ctx) => {
-  await ctx.reply(
-    "👋 Welcome! You will receive crypto scanner updates here.\n\n📌 Commands:\n" +
-      "/start - register chat\n" +
-      "/status - scanner & baseline status\n" +
-      "/top10 - show baseline coins\n" +
-      "/profit - show profit since baseline\n" +
-      "/alerts - list alerts\n" +
-      "/setbaseline [YYYY-MM-DD] - admin set baseline\n" +
-      "/clearhistory - admin clear alerts\n" +
-      "/autoprofit on|off - toggle auto-profit updates"
+bot.command("status", (ctx) => {
+  if (!baseline) return ctx.reply("⚠️ No baseline set.");
+  ctx.reply(
+    `📊 Baseline date: [${baseline.date}]\nSet at: ${baseline.setAt}\nCoins tracked: ${baseline.coins.length}`
   );
 });
 
-bot.command("status", async (ctx) => {
-  let text = `📊 Baseline date: [${baseline.date || "N/A"}]\nSet at: ${baseline.setAt || "N/A"}\nCoins tracked: ${
-    baseline.coins.length
-  }\nFilters: Gain ≥ ${MIN_GAIN}%, Volume ≥ $${MIN_VOLUME / 1e6}M, Market Cap ≥ $${MIN_MARKETCAP / 1e6}M`;
-  await ctx.reply(text);
-});
-
-bot.command("top10", async (ctx) => {
-  if (!baseline.date) return ctx.reply("⚠️ No baseline set yet.");
-  if (baseline.coins.length === 0) return ctx.reply("⚠️ No coins match filters now.");
-  let text = `📊 Baseline Top 10 (day: ${baseline.date})`;
-  baseline.coins.forEach((c, i) => {
-    text += `\n${i + 1}. ${c.symbol} — $${c.price.toFixed(4)} (24h: ${c.percent.toFixed(2)}%)`;
-  });
-  await ctx.reply(text);
+bot.command("setbaseline", async (ctx) => {
+  if (ctx.from.id.toString() !== ADMIN_ID) return;
+  const arg = ctx.message.text.split(" ")[1];
+  const newBaseline = await setBaseline(arg);
+  ctx.reply(
+    `✅ Baseline set (manual) at ${moment(newBaseline.setAt)
+      .tz("Asia/Kolkata")
+      .format("D/M/YYYY, h:mm:ss a")}\nDate: [${newBaseline.date}]`
+  );
 });
 
 bot.command("profit", async (ctx) => {
-  await ctx.reply(await profitReport());
+  ctx.reply(await calculateProfit());
 });
 
-bot.command("alerts", async (ctx) => {
-  if (!baseline.date) return ctx.reply("⚠️ No baseline set yet.");
-  if (alerts.alerts.length === 0) return ctx.reply(`🔔 No alerts for baseline ${baseline.date}`);
-  await ctx.reply(`🔔 Alerts for baseline ${baseline.date}: ${alerts.alerts.join(", ")}`);
-});
-
-bot.command("setbaseline", async (ctx) => {
-  if (ctx.from.id.toString() !== ADMIN_ID) return ctx.reply("❌ Admin only.");
-  const args = ctx.message.text.split(" ");
-  const customDate = args[1] || null;
-  await setBaseline(true, customDate);
-});
-
-bot.command("clearhistory", async (ctx) => {
-  if (ctx.from.id.toString() !== ADMIN_ID) return ctx.reply("❌ Admin only.");
-  alerts = { baselineDate: baseline.date, alerts: [] };
-  fs.writeJsonSync(ALERTS_FILE, alerts, { spaces: 2 });
-  await ctx.reply("🧹 Alerts history cleared.");
+bot.command("top10", async (ctx) => {
+  if (!baseline || !baseline.coins.length)
+    return ctx.reply("⚠️ No coins match filters now.");
+  let text = `🔥 Top 10 coins at baseline (${baseline.date})`;
+  baseline.coins.slice(0, 10).forEach((c, i) => {
+    text += `\n${i + 1}. ${c.symbol} — ₹${c.price.toFixed(2)} (24h: ${c.percent.toFixed(
+      2
+    )}%)`;
+  });
+  ctx.reply(text);
 });
 
 bot.command("autoprofit", async (ctx) => {
-  if (ctx.from.id.toString() !== ADMIN_ID) return ctx.reply("❌ Admin only.");
   const arg = ctx.message.text.split(" ")[1];
   if (arg === "on") {
-    if (autoProfitInterval) clearInterval(autoProfitInterval);
-    autoProfitInterval = setInterval(async () => {
-      const report = await profitReport();
-      await bot.telegram.sendMessage(CHAT_ID, `⏱ Auto-profit update:\n\n${report}`);
-    }, 5 * 60 * 1000);
-    await ctx.reply("✅ Auto-profit updates enabled (every 5 minutes).");
+    if (autoProfitJob) autoProfitJob.cancel();
+    autoProfitOn = true;
+    autoProfitJob = schedule.scheduleJob("*/5 * * * *", async () => {
+      const msg = await calculateProfit();
+      await bot.telegram.sendMessage(CHAT_ID, "⏱ Auto-profit update:\n\n" + msg);
+    });
+    ctx.reply("✅ Auto-profit updates ON (every 5 min).");
   } else if (arg === "off") {
-    clearInterval(autoProfitInterval);
-    autoProfitInterval = null;
-    await ctx.reply("⏱ Auto-profit updates disabled.");
+    if (autoProfitJob) autoProfitJob.cancel();
+    autoProfitOn = false;
+    ctx.reply("🛑 Auto-profit updates OFF.");
   } else {
-    await ctx.reply("Usage: /autoprofit on|off");
+    ctx.reply("Usage: /autoprofit on|off");
   }
 });
 
-// --- Scheduler ---
-schedule.scheduleJob({ hour: BASELINE_HOUR, minute: BASELINE_MINUTE, tz: "Asia/Kolkata" }, () => {
-  setBaseline(false);
+// ===== DAILY AUTO BASELINE =====
+schedule.scheduleJob({ hour: BASELINE_HOUR, minute: BASELINE_MINUTE, tz: "Asia/Kolkata" }, async () => {
+  const bl = await setBaseline();
+  await bot.telegram.sendMessage(
+    CHAT_ID,
+    `✅ Baseline set (auto) at ${moment(bl.setAt).tz("Asia/Kolkata").format("D/M/YYYY, h:mm:ss a")}\nDate: [${bl.date}]`
+  );
 });
-setInterval(checkAlerts, REFRESH_INTERVAL);
-
-log(
-  `Configuration: baseline ${BASELINE_HOUR}:${BASELINE_MINUTE} IST | refresh ${REFRESH_INTERVAL} ms | alert drop ${ALERT_DROP_PERCENT}%`
-);
-if (!baseline.date) log("⚠️ Official baseline not set yet. Will auto-set at baseline time or admin can run /setbaseline.");
