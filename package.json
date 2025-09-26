@@ -1,17 +1,15 @@
 {
   "name": "crypto-scanner",
   "version": "1.5.0",
-  "description": "Crypto Scanner with Baseline, Auto-Profit, RSI & Volume Filters (INR)",
   "main": "cryptoScanner.js",
   "type": "module",
   "scripts": {
     "start": "node cryptoScanner.js"
   },
   "dependencies": {
-    "axios": "^1.7.3",
-    "express": "^4.21.1",
-    "moment-timezone": "^0.5.46",
+    "axios": "^1.7.2",
+    "express": "^4.19.2",
     "node-schedule": "^2.1.1",
-    "telegraf": "^4.16.3"
+    "telegraf": "^4.15.3"
   }
 }
