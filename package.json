@@ -1,14 +1,17 @@
 {
   "name": "crypto-scanner",
-  "version": "1.5.0",
+  "version": "1.6.0",
+  "description": "Crypto scanner bot with baseline, profit tracking, and alerts",
   "main": "cryptoScanner.js",
   "type": "module",
   "scripts": {
     "start": "node cryptoScanner.js"
   },
   "dependencies": {
-    "axios": "^1.7.4",
+    "axios": "^1.6.7",
     "express": "^4.19.2",
+    "fs-extra": "^11.2.0",
+    "moment-timezone": "^0.5.46",
     "node-schedule": "^2.1.1",
     "telegraf": "^4.16.3"
   }
