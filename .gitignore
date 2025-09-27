@@ -1,5 +1,5 @@
 node_modules/
 data.json
 alerts.json
-logs/
+logs/*.log
 .env
