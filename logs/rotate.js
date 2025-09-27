@@ -1,35 +1,21 @@
-// logs/rotate.js
 import fs from "fs";
 import path from "path";
 
-const LOG_DIR = path.resolve("logs");
-const MAX_DAYS = 7;
+const logsDir = path.join(process.cwd(), "logs");
 
-function rotateLogs() {
-  if (!fs.existsSync(LOG_DIR)) return;
+export function rotateLogs() {
+  if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir);
 
-  const files = fs.readdirSync(LOG_DIR)
-    .map(f => ({
+  const files = fs
+    .readdirSync(logsDir)
+    .filter((f) => f.endsWith(".log"))
+    .map((f) => ({
       file: f,
-      time: fs.statSync(path.join(LOG_DIR, f)).mtime.getTime()
+      time: fs.statSync(path.join(logsDir, f)).mtime.getTime(),
     }))
-    .sort((a, b) => b.time - a.time); // newest first
+    .sort((a, b) => b.time - a.time);
 
-  // Keep only the latest MAX_DAYS files
-  const toDelete = files.slice(MAX_DAYS);
-
-  toDelete.forEach(({ file }) => {
-    const filePath = path.join(LOG_DIR, file);
-    try {
-      fs.unlinkSync(filePath);
-      console.log(`[LOG ROTATE] Deleted old log: ${file}`);
-    } catch (err) {
-      console.error(`[LOG ROTATE] Failed to delete ${file}:`, err);
-    }
+  files.slice(7).forEach(({ file }) => {
+    fs.unlinkSync(path.join(logsDir, file));
   });
 }
-
-// Run rotation once at startup
-rotateLogs();
-
-export default rotateLogs;
