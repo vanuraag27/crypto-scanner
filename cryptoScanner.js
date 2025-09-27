@@ -473,4 +473,122 @@ if (bot) {
       baselineINR: b.priceINR,
       currentUSD: b.priceUSD * (1 + (ALERT_DROP_PERCENT/100)),
       currentINR: b.priceINR * (1 + (ALERT_DROP_PERCENT/100)),
-      dropPct
+      dropPct: ALERT_DROP_PERCENT,
+      time: nowIST("YYYY-MM-DD HH:mm:ss")
+    };
+    alerts.push(simulated);
+    saveJSON(ALERTS_FILE, alerts);
+    alertedSymbols.add(sym);
+    await ctx.reply(`🔔 ALERT (forced): ${sym} dropped ${ALERT_DROP_PERCENT}%\nBaseline: $${b.priceUSD.toFixed(4)}\nCurrent (sim): $${simulated.currentUSD.toFixed(4)}\nTime (IST): ${simulated.time}`);
+  });
+}
+
+// Helper to build profit message (used by autoprofit)
+async function buildProfitMessage(limit = 10) {
+  const data = loadJSON(DATA_FILE, baseline);
+  if (!data || !data.coins || data.coins.length === 0) return "⚠️ No baseline set yet.";
+  const fx = await fetchUSDToINR();
+  const raw = await fetchTopCoins(FETCH_LIMIT);
+  const map = new Map(raw.map(c => [c.symbol, c]));
+  const arr = data.coins.slice(0, 50).map(b => {
+    const cur = map.get(b.symbol);
+    if (!cur) return { symbol: b.symbol, note: "data missing" };
+    const curUSD = cur.quote.USD.price;
+    const pct = ((curUSD - b.priceUSD) / b.priceUSD) * 100;
+    return { symbol: b.symbol, fromUSD: b.priceUSD, toUSD: curUSD, pct };
+  });
+  arr.sort((a,b) => (b.pct || 0) - (a.pct || 0));
+  const lines = arr.slice(0, limit).map((r,i) => {
+    if (r.note) return `${i+1}. ${r.symbol} → ${r.note}`;
+    return `${i+1}. ${r.symbol} → ${r.pct.toFixed(2)}% (from $${r.fromUSD.toFixed(2)} → $${r.toUSD.toFixed(2)})`;
+  });
+  return `📈 Profit since baseline (${baseline.date})\n${lines.join("\n")}`;
+}
+
+// ----------------- Scheduler: auto-set baseline at BASELINE_HOUR:BASELINE_MINUTE IST daily -----------------
+function scheduleBaselineJob() {
+  // node-cron uses server timezone by default; we'll schedule using UTC adjusted for IST
+  // Simpler: compute cron expression in IST and run every minute when local server timezone = UTC.
+  // Better: run a cron every minute and check if current IST matches target time.
+  cron.schedule("* * * * *", async () => {
+    const now = moment().tz("Asia/Kolkata");
+    if (!baseline.date) {
+      // only create baseline at exact configured hour:min
+      if (now.hour() === BASELINE_HOUR && now.minute() === BASELINE_MINUTE) {
+        try {
+          await createBaseline(null, true, CHAT_ID || loadJSON(DATA_FILE, {}).savedChat);
+        } catch (e) {
+          writeLog("Auto baseline failed: " + e.message);
+        }
+      }
+    }
+    // daily summary job trigger
+    if (now.hour() === DAILY_SUMMARY_HOUR && now.minute() === DAILY_SUMMARY_MINUTE) {
+      // send daily summary once at that minute
+      try {
+        const targetChat = CHAT_ID || loadJSON(DATA_FILE, {}).savedChat;
+        if (targetChat) {
+          const msg = await buildDailySummary();
+          await sendTelegramMessage(targetChat, msg);
+        }
+      } catch (e) {
+        writeLog("Daily summary error: " + e.message);
+      }
+    }
+  }, { timezone: "Asia/Kolkata" });
+}
+
+// Daily summary (10 PM IST)
+async function buildDailySummary() {
+  const data = loadJSON(DATA_FILE, baseline);
+  if (!data || !data.coins || data.coins.length === 0) return `⚠️ No baseline set for today.`;
+  // Build ranked list by profit
+  try {
+    const fx = await fetchUSDToINR();
+    const raw = await fetchTopCoins(FETCH_LIMIT);
+    const map = new Map(raw.map(c => [c.symbol, c]));
+    const arr = data.coins.map(b => {
+      const cur = map.get(b.symbol);
+      if (!cur) return { symbol: b.symbol, pct: -9999, missing: true };
+      const curUSD = cur.quote.USD.price;
+      const pct = ((curUSD - b.priceUSD) / b.priceUSD) * 100;
+      return { symbol: b.symbol, pct, fromUSD: b.priceUSD, toUSD: curUSD };
+    });
+    arr.sort((a,b) => (b.pct || 0) - (a.pct || 0));
+    const lines = arr.slice(0, 20).map((r,i) => {
+      if (r.missing) return `${i+1}. ${r.symbol} → data missing`;
+      return `${i+1}. ${r.symbol} → ${r.pct.toFixed(2)}% (from $${r.fromUSD.toFixed(2)} → $${r.toUSD.toFixed(2)})`;
+    });
+    return `📊 Daily Summary (${data.date}) — Ranked best → worst\n${lines.join("\n")}`;
+  } catch (e) {
+    writeLog("buildDailySummary error: " + e.message);
+    return "❌ Error building daily summary.";
+  }
+}
+
+// ----------------- Start server & initialize -----------------
+app.get("/", (req, res) => {
+  res.send("Crypto Scanner running");
+});
+
+app.listen(PORT, async () => {
+  writeLog(`🌍 Server listening on port ${PORT}`);
+  // set webhook
+  if (bot && TELEGRAM_TOKEN && BASE_URL) {
+    try {
+      await bot.telegram.setWebhook(`${BASE_URL.replace(/\/$/, "")}/webhook`);
+      writeLog(`✅ Webhook set to ${BASE_URL}/webhook`);
+    } catch (e) {
+      writeLog(`❌ Error setting webhook: ${e?.response?.data || e.message}`);
+    }
+  } else {
+    writeLog("Telegram webhook not configured (missing TELEGRAM_TOKEN or BASE_URL).");
+  }
+  scheduleBaselineJob();
+  // start periodic alert check
+  setInterval(checkAlerts, Math.max(REFRESH_INTERVAL, 15000)); // at least 15s
+});
+
+// ---------- Final notes ----------
+writeLog(`Configuration: BASELINE ${BASELINE_HOUR}:${String(BASELINE_MINUTE).padStart(2,"0")} IST | REFRESH_INTERVAL ${REFRESH_INTERVAL}ms | ALERT_DROP_PERCENT ${ALERT_DROP_PERCENT}`);
+
