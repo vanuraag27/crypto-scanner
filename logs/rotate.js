@@ -1,21 +1,19 @@
 import fs from "fs";
 import path from "path";
 
-const logsDir = path.join(process.cwd(), "logs");
+export function rotateLogs(logDir = path.join(process.cwd(), "logs")) {
+  try {
+    if (!fs.existsSync(logDir)) return;
+    const files = fs.readdirSync(logDir).filter(f => f.endsWith(".log"));
+    const keep = 7;
+    const byTime = files.map(f => {
+      const p = path.join(logDir, f);
+      return { f, t: fs.statSync(p).mtime.getTime() };
+    }).sort((a,b) => b.t - a.t);
 
-export function rotateLogs() {
-  if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir);
-
-  const files = fs
-    .readdirSync(logsDir)
-    .filter((f) => f.endsWith(".log"))
-    .map((f) => ({
-      file: f,
-      time: fs.statSync(path.join(logsDir, f)).mtime.getTime(),
-    }))
-    .sort((a, b) => b.time - a.time);
-
-  files.slice(7).forEach(({ file }) => {
-    fs.unlinkSync(path.join(logsDir, file));
-  });
+    const toDelete = byTime.slice(keep);
+    toDelete.forEach(o => {
+      try { fs.unlinkSync(path.join(logDir, o.f)); } catch(e){}
+    });
+  } catch(e){}
 }
