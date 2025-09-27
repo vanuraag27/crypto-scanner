@@ -1,19 +1,15 @@
 {
   "name": "crypto-scanner",
-  "version": "1.5.1",
-  "description": "Telegram crypto scanner bot with baseline, alerts, profit tracking, and auto updates",
+  "version": "1.6.0",
   "main": "cryptoScanner.js",
+  "type": "module",
   "scripts": {
     "start": "node cryptoScanner.js"
   },
   "dependencies": {
-    "axios": "^1.7.2",
+    "axios": "^1.11.0",
     "express": "^4.19.2",
     "node-schedule": "^2.1.1",
     "telegraf": "^4.16.3"
-  },
-  "engines": {
-    "node": ">=18.x"
-  },
-  "license": "MIT"
+  }
 }
