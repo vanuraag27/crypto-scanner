@@ -147,7 +147,7 @@ function calculateRSI(closes, period = 14) {
 async function coinPassesFilters(rawCoin) {
   // rawCoin: returned from CMC listings
   // filters:
-  //  - 24h gain >= 20%
+  //  - 24h gain >= 5%
   //  - 24h volume >= $50,000,000
   //  - market cap >= $500,000,000
   //  - RSI increased vs previous day (best-effort)
@@ -156,7 +156,7 @@ async function coinPassesFilters(rawCoin) {
     const pct24 = rawCoin.quote.USD.percent_change_24h || 0;
     const vol24 = rawCoin.quote.USD.volume_24h || 0;
     const mcap = rawCoin.quote.USD.market_cap || 0;
-    if (pct24 < 20) return false;
+    if (pct24 < 5) return false;
     if (vol24 < 50_000_000) return false;
     if (mcap < 500_000_000) return false;
 
@@ -325,7 +325,7 @@ if (bot) {
     try {
       // For quick response: filter based on stored fields (24h gain, volume, marketcap)
       const candidates = data.coins.filter(c => {
-        return c.percent24h >= 20 && c.volume24h >= 50_000_000 && c.marketCap >= 500_000_000;
+        return c.percent24h >= 5 && c.volume24h >= 50_000_000 && c.marketCap >= 500_000_000;
       });
 
       // For each candidate attempt to run RSI + volume up check (best-effort, async)
